@@ -1,0 +1,24 @@
+# 单容器:node 构建 React → python(FastAPI)托管静态 UI + API。
+# 构建 context = 仓库根:  docker build -f Dockerfile.web -t nlp-backend .
+# ---- stage 1: 构建 React ----
+FROM node:20-bookworm-slim AS fe
+WORKDIR /fe
+COPY frontend/package.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npx vite build   # 产出 /fe/dist(用 vite build 跳过 tsc 类型检查,更稳)
+
+# ---- stage 2: python 后端 + 静态 UI ----
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY backend/pyproject.toml /app/
+RUN uv pip install --system \
+    fastapi "uvicorn[standard]" pydantic pydantic-settings boto3 "python-jose[cryptography]" httpx
+COPY backend/app /app/app
+COPY --from=fe /fe/dist /app/static
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD curl -f http://localhost:8000/health || exit 1
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

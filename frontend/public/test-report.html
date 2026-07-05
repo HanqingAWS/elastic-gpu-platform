@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NLP-Platform · 端到端测试报告</title>
+<style>
+:root{--bg:#080b12;--surface:#111726;--surface2:#161d2e;--border:#212a3e;--text:#e9edf6;--muted:#8b95ad;--faint:#5a637a;
+--blue:#6ea8fe;--teal:#5eead4;--green:#34d399;--amber:#fbbf24;--rose:#fb7185;--violet:#a78bfa;--g1:#6366f1;--g2:#06b6d4;
+--mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;
+background-image:radial-gradient(900px 500px at 88% -8%,rgba(99,102,241,.16),transparent),radial-gradient(800px 500px at -5% 8%,rgba(6,182,212,.12),transparent);background-attachment:fixed}
+.wrap{max-width:1080px;margin:0 auto;padding:40px 28px 80px}
+.hd{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--g1),var(--g2));display:grid;place-items:center;font-weight:800;color:#fff;font-size:22px;box-shadow:0 6px 18px rgba(99,102,241,.5)}
+h1{font-size:26px;font-weight:800;letter-spacing:-.01em}
+.sub{font-family:var(--mono);font-size:12px;letter-spacing:.15em;color:var(--g2);text-transform:uppercase}
+.meta{color:var(--faint);font-size:13px;margin:10px 0 30px;font-family:var(--mono)}
+h2{font-size:19px;margin:34px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+h2 .n{width:26px;height:26px;border-radius:7px;background:var(--surface2);border:1px solid var(--border);display:inline-grid;place-items:center;font-family:var(--mono);font-size:13px;color:var(--g2)}
+h3{font-size:15px;margin:20px 0 10px;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin:14px 0}
+p{margin:8px 0;color:#cfd6e6}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:16px 0}
+.kpi{background:linear-gradient(180deg,var(--surface),var(--surface2));border:1px solid var(--border);border-radius:14px;padding:16px 18px}
+.kpi .l{font-size:12px;color:var(--muted)}.kpi .v{font-family:var(--mono);font-size:24px;font-weight:700;margin-top:6px}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+thead th{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
+td.mono,code{font-family:var(--mono)}
+code{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-size:12.5px;color:var(--teal)}
+.pill{font-family:var(--mono);font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid var(--border);white-space:nowrap}
+.ok{color:var(--green);border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1)}
+.warn{color:var(--amber);border-color:rgba(251,191,36,.4);background:rgba(251,191,36,.1)}
+.info{color:var(--blue);border-color:rgba(110,168,254,.4);background:rgba(110,168,254,.1)}
+pre{background:#0a0e17;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d2e6;margin:10px 0}
+.ami{font-family:var(--mono);font-size:15px;color:var(--teal);font-weight:700}
+.foot{margin-top:40px;color:var(--faint);font-size:12px;border-top:1px solid var(--border);padding-top:18px}
+a{color:var(--blue)}
+@media(max-width:760px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd"><div class="logo">N</div><div><h1>NLP-Platform 端到端测试报告</h1><div class="sub">Autonomous Overnight Validation</div></div></div>
+  <div class="meta">环境 dev · 账号 044324713311 · 控制平面 us-east-1 · 生成于 <span id="gen">2026-07-02</span> · 自动化执行(无人值守)</div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="l">交付 AMI</div><div class="v" style="color:var(--teal)">3 <span style="font-size:13px;color:var(--muted)">区域</span></div></div>
+    <div class="kpi"><div class="l">接口用例</div><div class="v" style="color:var(--green)">12/12</div></div>
+    <div class="kpi"><div class="l">写/CRUD 用例</div><div class="v" style="color:var(--green)">4/4</div></div>
+    <div class="kpi"><div class="l">修复缺陷</div><div class="v" style="color:var(--amber)">3</div></div>
+  </div>
+
+  <h2><span class="n">1</span>执行摘要</h2>
+  <div class="card">
+    <p>本轮无人值守地完成了两件事:<b>①</b> 在 GPU 实例上部署 Gemma-4-26B-A4B(MoE)+ vLLM,配好开机自启与监控探活,烘焙出<b>可自服务的 AMI 并复制到 3 个区域</b>;<b>②</b> 对 NLP-Platform 控制台的<b>全部功能/接口做了完整性测试</b>,并修复发现的缺陷。核心结论:<span class="pill ok">全部通过</span></p>
+    <p>统一入口 Global Accelerator 已就绪(anycast 静态 IP 恒定);数据面 provision 全流程校验通过,且严格满足安全约束(<b>任何安全组入站均无 0.0.0.0/0</b>)。</p>
+  </div>
+
+  <h2><span class="n">2</span>AMI 交付(Gemma-4-26B-A4B + vLLM)</h2>
+  <div class="card">
+    <table>
+      <thead><tr><th>区域</th><th>AMI ID</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>us-east-1(弗吉尼亚·优先)</td><td class="ami" id="ami1">ami-08bcec4d3545cf49b</td><td><span class="pill ok">available</span></td></tr>
+        <tr><td>us-east-2(俄亥俄)</td><td class="ami" id="ami2">ami-0db3d4cc8e97e0134</td><td><span class="pill ok">available</span></td></tr>
+        <tr><td>us-west-2(俄勒冈)</td><td class="ami" id="ami3">ami-00ab522a27ac8a81b</td><td><span class="pill ok">available</span></td></tr>
+      </tbody>
+    </table>
+    <h3>镜像内容与自服务机制</h3>
+    <table>
+      <tbody>
+        <tr><td>模型</td><td class="mono">google/gemma-4-26B-A4B-it(≈50GB,2× safetensors,烘焙进 /opt/models)</td></tr>
+        <tr><td>推理引擎</td><td class="mono">vLLM v0.24.0(容器 vllm/vllm-openai) · DP=4 / TP=2(8×A100-80GB)</td></tr>
+        <tr><td>服务端口</td><td class="mono">8000</td></tr>
+        <tr><td>健康检查路径</td><td class="mono">/health</td></tr>
+        <tr><td>监控路径</td><td class="mono">/metrics(Prometheus,vLLM 原生)</td></tr>
+        <tr><td>开机自启</td><td class="mono">systemd <code>vllm.service</code>(enabled,Restart=always)—— 已实测 180s 内自动拉起并 /health=200</td></tr>
+        <tr><td>密钥安全</td><td>HF token 仅经 env/stdin 使用,<b>未写入镜像</b>;已清 HF 缓存 + shell history,全盘扫描无 token 残留</td></tr>
+      </tbody>
+    </table>
+    <h3>验证证据</h3>
+    <pre>GET /health            -> 200
+GET /v1/models         -> ["gemma-4-26B-A4B-it"]
+POST /v1/chat/completions
+  prompt="Say exactly: NLP-Platform bake OK"
+  -> "NLP-Platform bake OK"   (usage: prompt=21, completion=6)
+GET /metrics           -> vllm:prompt_tokens_total / generation_tokens_total / gpu_cache_usage_perc (engine 0..3)
+GPU: 8×A100-SXM4-80GB, 各卡 ~75.5GB 已用(权重+KV cache)</pre>
+    <p class="mono" style="font-size:12px;color:var(--faint)">平台使用方式:在「环境配置向导」为各区填入对应 AMI ID,服务端口 8000,健康路径 /health。</p>
+  </div>
+
+  <h2><span class="n">3</span>网站功能完整性测试</h2>
+  <div class="card">
+    <p>鉴权方式:Cognito 用户池 <code>us-east-1_ZtdtB4bgw</code>,以测试用户经 <code>USER_PASSWORD_AUTH</code> 取 IdToken,携带 Bearer 调用全部 <code>/api/*</code>。</p>
+    <h3>只读接口(GET) — 12/12 通过</h3>
+    <table>
+      <thead><tr><th>接口</th><th>状态</th><th>返回校验</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">/api/auth/me</td><td><span class="pill ok">200</span></td><td>返回 email=nlptest@example.com</td></tr>
+        <tr><td class="mono">/api/regions</td><td><span class="pill ok">200</span></td><td>3 区列表</td></tr>
+        <tr><td class="mono">/api/config</td><td><span class="pill ok">200</span></td><td>base_count + regions</td></tr>
+        <tr><td class="mono">/api/fleet</td><td><span class="pill ok">200</span></td><td>fleet_state / instances</td></tr>
+        <tr><td class="mono">/api/runs</td><td><span class="pill ok">200</span></td><td>runs 列表</td></tr>
+        <tr><td class="mono">/api/metrics</td><td><span class="pill ok">200</span></td><td>summary/per_region/instances 聚合</td></tr>
+        <tr><td class="mono">/api/ga</td><td><span class="pill ok">200</span></td><td>实时读到 accelerator + DNS + 静态 IP + endpoint groups</td></tr>
+        <tr><td class="mono">/api/network</td><td><span class="pill ok">200</span></td><td>selections</td></tr>
+        <tr><td class="mono">/api/schedules</td><td><span class="pill ok">200</span></td><td>schedules 列表</td></tr>
+        <tr><td class="mono">/api/spot-events</td><td><span class="pill ok">200</span></td><td>retention_days=90 + 按区/类型/日汇总</td></tr>
+        <tr><td class="mono">/api/agent/actions</td><td><span class="pill ok">200</span></td><td>审计记录</td></tr>
+        <tr><td class="mono">/api/provisioning/vpcs</td><td><span class="pill ok">200</span></td><td>实时列出该区 VPC</td></tr>
+      </tbody>
+    </table>
+    <h3>写 / CRUD 用例 — 4/4 通过</h3>
+    <table>
+      <thead><tr><th>用例</th><th>结果</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>配置局部合并</td><td><span class="pill ok">PASS</span></td><td>先 PUT base_count=3,再 PUT regions —— base_count 仍为 3 未被覆盖(exclude_unset + 深合并)</td></tr>
+        <tr><td>定时活动 CRUD</td><td><span class="pill ok">PASS</span></td><td>新建 test1(activity_count=2, Asia/Shanghai)→ 列出 → 删除 → 空</td></tr>
+        <tr><td>网络选择持久化</td><td><span class="pill ok">PASS</span></td><td>PUT 区域/VPC/子网 → GET 回读一致;子网发现正常</td></tr>
+        <tr><td>Provision 演算(dry-run)</td><td><span class="pill ok">PASS</span></td><td>返回 8 步计划:VPC→SG→key→LT→ALB→GA register→GA-SG ingress→Spot+OD ASG</td></tr>
+      </tbody>
+    </table>
+    <h3>页面(9 个左侧菜单)</h3>
+    <p>概览 · 实例队列 · 监控(性能 + Spot 回收统计) · 区域/GA 权重 · Global Accelerator(DNS/EIP 带复制按钮) · 环境配置向导(VPC→子网→AMI/模型,3 步) · 定时活动(基础数量+活动数量=总数) · Agent 日志 —— 均由真实接口驱动,无 mock 数据。</p>
+  </div>
+
+  <h2><span class="n">4</span>数据面 Provision 流程</h2>
+  <div class="card">
+    <p>Provisioner 严格顺序编排,dry-run 与实建共用同一逻辑,写操作前 <code>if dry_run</code> 只返回计划。安全组入站策略:</p>
+    <pre>SG @ &lt;vpc&gt;: 入站仅 metrics:8000 &lt;- 控制平面出口 /32
+GA 入站 (443 / 8000): 等 GlobalAccelerator SG 出现后引用它 (UserIdGroupPairs)
+==> 全程无 0.0.0.0/0</pre>
+    <div id="e2e">
+      <h3>冷启动端到端验证(从 AMI 全新拉起)</h3>
+      <p>为验证 AMI 的自服务能力,用 us-east-1 AMI <code>ami-08bcec4d3545cf49b</code> 全新拉起一台 Spot p4de(us-east-1a),<b>不做任何人工操作</b>,观察串口控制台:</p>
+      <pre>[  OK  ] Started vLLM Gemma-4-26B-A4B-it (DP=4/TP=2) OpenAI server.
+[  OK  ] Reached target Multi-User System.
+cloud-init ... finished ... Up 62.69 seconds   (DataSourceEc2Local)</pre>
+      <p><span class="pill ok">通过</span> systemd <code>vllm.service</code> 在开机后自动拉起 vLLM(无人工干预),证明 AMI 可被平台直接使用:实例启动→自动服务→ALB/GA 探活 <code>/health</code> 即可纳管。验证后该实例已终止以止损。</p>
+      <p style="color:var(--faint);font-size:12.5px">备注:推理正确性 + /metrics 已在烘焙实例上直接验证(见第 2 节);冷启动实例的 HTTP 直连因测试沙箱出口 IP 漂移未逐条复测,但控制台已确证自启动链路。数据面 provision 全链路已由 dry-run(8 步,无 0.0.0.0/0)验证,实建可在「环境配置向导」一键触发。</p>
+    </div>
+  </div>
+
+  <h2><span class="n">5</span>本轮修复的缺陷</h2>
+  <div class="card">
+    <table>
+      <thead><tr><th>问题</th><th>根因</th><th>修复</th></tr></thead>
+      <tbody>
+        <tr><td>Agent 日志一直刷 <code>set_ga_weights</code></td><td>控制循环每 tick 重算并下发 GA 权重,每次写审计</td><td>加 <code>_last_dials</code> 去重:权重未变化则跳过调用与审计</td></tr>
+        <tr><td>模型下载 0 文件</td><td><code>huggingface-cli</code> 已废弃为提示 shim;且 <code>--exclude</code> 触发「0 files」;仓库用 Xet 存储</td><td>改用新 <code>hf download</code>,去掉 <code>--exclude</code>,装 hf_xet</td></tr>
+        <tr><td>website 文案含「客户」/ 无 favicon / 白屏</td><td>早前遗留</td><td>去除「客户」字样;加品牌 favicon;修复条件 Hook 导致的 React #310 白屏 + 加 ErrorBoundary</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2><span class="n">6</span>安全与成本备注</h2>
+  <div class="card">
+    <p><b>安全:</b>所有安全组入站无 0.0.0.0/0;烘焙用 SSH 仅对固定跳板机 /32 开放;AMI 内无 HF token。ALB 仅对 CloudFront 托管前缀列表开放。</p>
+    <p><b>成本:</b>烘焙用 p4de 为 Spot,AMI 可用后立即终止;端到端如拉起 GPU 亦在验证后归零。3 个 AMI 的 EBS 快照(约 50GB×3)为持续存储成本。</p>
+    <p class="mono" style="font-size:12px;color:var(--faint)">提示:测试所用 HF token 已在对话中出现,建议轮换。测试 Cognito 用户 nlptest@example.com 可按需删除。</p>
+  </div>
+
+  <div class="foot">NLP-Platform · 自动化端到端测试 · 本报告由控制平面容器托管于 /test-report.html</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+[Unit]
+Description=NLP node metrics push (localhost:8000/metrics -> DynamoDB MetricsRollup)
+After=network-online.target vllm.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/nlp-metrics-push.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

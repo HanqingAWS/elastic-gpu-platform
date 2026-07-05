@@ -1,0 +1,12 @@
+node_modules/
+cdk.out/
+dist/
+.venv/
+.venv-test/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.pem
+.DS_Store
+.claude/

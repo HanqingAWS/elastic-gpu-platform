@@ -1,0 +1,13 @@
+[project]
+name = "nlp-platform-agent"
+version = "0.1.0"
+description = "NLP-Platform Agent/Scheduler service (Strands SDK)"
+requires-python = ">=3.12"
+dependencies = [
+    "strands-agents>=0.1.0",
+    "boto3>=1.35",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "tzdata>=2024.1",
+]
