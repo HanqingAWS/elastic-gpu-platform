@@ -172,11 +172,14 @@ function GlobalTypes() {
   return (
     <div className="card" style={{ padding: 12, marginBottom: 14 }}>
       <div className="section-t" style={{ margin: '0 0 8px' }}>全局机型优先级 <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>全按需 · 顺序即优先级(排前先开,开不出用下一个)· 各区可在抽屉里单独覆盖</span></div>
+      {/* 预设:两个互斥的顺序 —— 用 subnav 样式(.subnav button.on 才有高亮;.btn 上的 .on 无样式) */}
+      <div className="subnav" style={{ marginBottom: 8 }}>
+        <button className={norm(types) === 'p4d.24xlarge,p4de.24xlarge' ? 'on' : ''} onClick={() => setTypes('p4d.24xlarge, p4de.24xlarge')}>p4d 优先(默认)</button>
+        <button className={norm(types) === 'p4de.24xlarge,p4d.24xlarge' ? 'on' : ''} onClick={() => setTypes('p4de.24xlarge, p4d.24xlarge')}>p4de 优先</button>
+      </div>
       <div className="inline" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <div className="field" style={{ flex: '1 1 260px', margin: 0 }}>
           <input value={types} onChange={(e) => setTypes(e.target.value)} placeholder="p4d.24xlarge, p4de.24xlarge" /></div>
-        <button className={`btn btn-sm ${norm(types) === 'p4d.24xlarge,p4de.24xlarge' ? 'on' : ''}`} onClick={() => setTypes('p4d.24xlarge, p4de.24xlarge')}>p4d 优先</button>
-        <button className={`btn btn-sm ${norm(types) === 'p4de.24xlarge,p4d.24xlarge' ? 'on' : ''}`} onClick={() => setTypes('p4de.24xlarge, p4d.24xlarge')}>p4de 优先</button>
         <button className="btn btn-sm" onClick={save} disabled={busy || types === saved}>{busy ? '保存中…' : '保存'}</button>
         {msg && <span className={`toast ${msg.ok ? 'ok' : 'err'}`}>{msg.t}</span>}
       </div>
@@ -264,7 +267,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   const save = async () => { setBusy('save'); if (await saveAll()) { setToast({ ok: true, msg: '配置已保存 ✓' }); onChanged(); } setBusy(null); };
 
   const removeRegion = async () => {
-    if (!window.confirm(`从注册表移除 ${region}?\n\n只删配置项,不会拆除已建的 ASG / ALB / VPC / GA endpoint group。\n若该区已创建资源,请先把 desired 归零并另行清理,以免继续计费。`)) return;
+    if (!window.confirm(`移除 ${region}?\n\n将从注册表删除,并在后台拆除该区 AWS 资源:GA endpoint group / ALB / TargetGroup / ASG / 启动模板。\n保留 VPC / 子网 / 安全组(可复用;之后可重新添加并创建资源)。\n拆除约需 1–2 分钟,Global Accelerator 页稍后会更新。`)) return;
     setBusy('remove');
     try { await api.deleteRegion(region); onChanged(); onClose(); }
     catch (e: any) { setToast({ ok: false, msg: e.message }); setBusy(null); }
@@ -426,7 +429,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
         )}
 
         <div className="drawer-foot">
-          <button className="btn btn-sm btn-ghost" onClick={removeRegion} disabled={!!busy} title="从注册表移除该区(不拆 AWS 资源)" style={{ color: 'var(--rose, #f43f5e)', marginRight: 'auto' }}>{busy === 'remove' ? '移除中…' : '移除区域'}</button>
+          <button className="btn btn-sm btn-ghost" onClick={removeRegion} disabled={!!busy} title="移除并拆除该区 GA/ALB/ASG(保留 VPC 可复用)" style={{ color: 'var(--rose, #f43f5e)', marginRight: 'auto' }}>{busy === 'remove' ? '移除中…' : '移除区域'}</button>
           <button className="btn btn-sm btn-ghost" onClick={save} disabled={!!busy || blockOpen}>{busy === 'save' ? '暂存中…' : '暂存'}</button>
           <button className="btn btn-sm" onClick={provision} disabled={!!busy || !amiArn || blockOpen}>
             {busy === 'provision' ? '创建中…' : created ? '重新创建 / 补齐' : '创建数据面资源'}

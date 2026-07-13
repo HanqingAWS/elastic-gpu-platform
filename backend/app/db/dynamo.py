@@ -85,6 +85,12 @@ class Dynamo:
         cur["config_id"] = "default"
         cur["updated_at"] = int(time.time())
         self._t(self.s.table_config).put_item(Item=cur)
+        # 顺带清理该区遗留的 FleetState 行(否则实例队列/概览仍显示已删区,PK=region+asg_kind)
+        for kind in ("od", "spot"):
+            try:
+                self._t(self.s.table_fleetstate).delete_item(Key={"region": region, "asg_kind": kind})
+            except Exception:  # noqa: BLE001
+                pass
         return cur
 
     # ---- Schedules(活动窗口排期) ----

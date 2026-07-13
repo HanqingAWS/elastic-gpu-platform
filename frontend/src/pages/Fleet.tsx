@@ -1,5 +1,5 @@
 import { api } from '../services/api';
-import { useLive, Loading, Empty, healthClass, REGION_LABEL } from './common';
+import { useLive, Loading, Empty, healthClass, REGION_LABEL, fmt } from './common';
 
 export default function Fleet() {
   const { data, loading } = useLive(() => api.fleet(), 15000);
@@ -9,7 +9,7 @@ export default function Fleet() {
 
   return (
     <>
-      <div className="section-t">ASG 状态(全按需;spot 行为历史遗留,恒为 0)</div>
+      <div className="section-t">ASG 状态</div>
       <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
         <table>
           <thead><tr><th>区域</th><th>类型</th><th>期望</th><th>健康</th><th>更新时间</th></tr></thead>
@@ -22,7 +22,7 @@ export default function Fleet() {
                 <td><span className={`tag ${f.asg_kind === 'spot' ? 'b' : 'a'}`}>{f.asg_kind}</span></td>
                 <td>{f.desired ?? 0}</td>
                 <td className={Number(f.healthy) >= Number(f.desired) ? 'b-teal' : 'b-amber'}>{f.healthy ?? 0}</td>
-                <td className="faint">{f.updated_at ? new Date(f.updated_at * 1000).toLocaleTimeString() : '—'}</td>
+                <td className="faint">{fmt(f.updated_at)}</td>
               </tr>
             ))}
           </tbody>

@@ -122,7 +122,7 @@ function ActionsTable() {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <table>
           <thead><tr>
-            <th>时间</th><th>来源</th><th>动作</th><th>区域 / 类型</th><th>变更(前 → 后)</th><th>原因</th>
+            <th>时间</th><th>来源</th><th style={{ whiteSpace: 'nowrap', minWidth: 150 }}>动作</th><th style={{ whiteSpace: 'nowrap', minWidth: 180 }}>区域 / 类型</th><th style={{ whiteSpace: 'nowrap', minWidth: 170 }}>变更(前 → 后)</th><th>原因</th>
           </tr></thead>
           <tbody>
             {actions.length === 0 ? (
@@ -134,14 +134,14 @@ function ActionsTable() {
                 <tr key={a.ts_uuid || i}>
                   <td className="faint">{t ? new Date(t).toLocaleString() : (a.date || '—')}</td>
                   <td><span className={`tag ${a.source === 'agent' ? 'v' : 'b'}`}>{a.source === 'agent' ? 'Agent' : '规则'}</span></td>
-                  <td>{ACTION_LABEL[a.action] || a.action || '—'}</td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{ACTION_LABEL[a.action] || a.action || '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     {a.region && a.region !== '-' ? <span>{a.region}</span> : ''}
                     {kind ? <span className={`tag ${KIND_CLS[kind] || ''}`} style={{ marginLeft: 6 }}>{kind.toUpperCase()}</span> : ''}
                     {(!a.region || a.region === '-') && !kind ? '—' : ''}
-                    {a.region && REGION_LABEL[a.region] ? <div className="faint" style={{ fontSize: 11 }}>{REGION_LABEL[a.region]}</div> : null}
+                    {a.region && REGION_LABEL[a.region] ? <span className="faint" style={{ fontSize: 11, marginLeft: 6 }}>{REGION_LABEL[a.region]}</span> : null}
                   </td>
-                  <td className="mono b-teal">{change(a)}</td>
+                  <td className="mono b-teal" style={{ whiteSpace: 'nowrap' }}>{change(a)}</td>
                   <td className="faint" style={{ fontSize: 12.5 }}>{a.reason || '—'}</td>
                 </tr>
               );

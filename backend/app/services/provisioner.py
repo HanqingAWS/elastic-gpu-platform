@@ -8,6 +8,7 @@ from __future__ import annotations
 from ..core.config import get_settings
 from ..db.dynamo import get_dynamo
 from .aws import ec2, elbv2, ga, autoscaling
+from .aws.session import client
 
 ALB_LISTENER_PORT = 80  # ALB HTTP 监听端口;GA(443)经 PortOverride 转发到此端口
 DEFAULT_TYPES = ["p4d.24xlarge", "p4de.24xlarge"]  # 兜底默认:p4d 优先
@@ -45,6 +46,73 @@ def region_status(region: str, vpc_id: str | None = None) -> dict:
     state = "created" if od else "none"
     return {"region": region, "state": state, "provisioned": bool(od),
             "od_asg": od, "spot_asg": asgs.get(f"nlp-spot-{region}"), "alb": alb}
+
+
+def deprovision_region(region: str, vpc_id: str | None = None, progress=None) -> dict:
+    """硬删除该区数据面 AWS 资源:GA endpoint group / ALB(+listener) / TargetGroup / ASG(od+spot) / LT。
+    **保留 VPC / 子网 / IGW / 路由表 / 安全组**(免费、可复用,且避开 GA 托管 ENI 异步回收的拆 VPC 之痛)。
+    best-effort:每步独立 try/except,不因单步失败中断。vpc_id 传入则按 VPC 精确过滤 ALB/TG(避免误删同区孤儿栈)。"""
+    s = get_settings()
+    steps: list[dict] = []
+
+    def emit(x: dict):
+        steps.append(x)
+        if progress:
+            progress(x)
+
+    # 1) ASG(od + spot)强制删除(desired 归零 + 删组)
+    asc = client("autoscaling", region)
+    for name in (f"nlp-od-{region}", f"nlp-spot-{region}"):
+        try:
+            asc.delete_auto_scaling_group(AutoScalingGroupName=name, ForceDelete=True)
+            emit({"asg_deleted": name})
+        except Exception as e:  # noqa: BLE001
+            if "not found" not in str(e).lower():
+                emit({"asg_skip": f"{name}: {e}"})
+    # 2) Launch Template
+    ec2c = client("ec2", region)
+    try:
+        for lt in ec2c.describe_launch_templates(
+                Filters=[{"Name": "launch-template-name", "Values": [f"nlp-lt-{region}"]}]).get("LaunchTemplates", []):
+            ec2c.delete_launch_template(LaunchTemplateId=lt["LaunchTemplateId"])
+            emit({"lt_deleted": lt["LaunchTemplateName"]})
+    except Exception as e:  # noqa: BLE001
+        emit({"lt_skip": str(e)})
+    # 3) GA endpoint group(连带把 ALB 从 GA 摘除)
+    try:
+        eg = ga.find_endpoint_group_arn(s.ga_accelerator_arn, region) if s.ga_accelerator_arn else None
+        if eg:
+            client("globalaccelerator", "us-west-2").delete_endpoint_group(EndpointGroupArn=eg)
+            emit({"ga_endpoint_group_deleted": region})
+    except Exception as e:  # noqa: BLE001
+        emit({"ga_skip": str(e)})
+    # 4) ALB(按区名前缀 + VPC 精确过滤,避免误删同区孤儿栈)→ 等删除完成 → 删其孤立 TG
+    elb = client("elbv2", region)
+    try:
+        lbs = [lb for lb in elb.describe_load_balancers().get("LoadBalancers", [])
+               if lb["LoadBalancerName"].startswith(f"nlp-{region}-") and (not vpc_id or lb.get("VpcId") == vpc_id)]
+        for lb in lbs:
+            elb.delete_load_balancer(LoadBalancerArn=lb["LoadBalancerArn"])
+            emit({"alb_deleting": lb["LoadBalancerName"]})
+        if lbs:
+            try:
+                elb.get_waiter("load_balancers_deleted").wait(
+                    LoadBalancerArns=[lb["LoadBalancerArn"] for lb in lbs],
+                    WaiterConfig={"Delay": 15, "MaxAttempts": 20})
+            except Exception:  # noqa: BLE001
+                pass
+        for tg in elb.describe_target_groups().get("TargetGroups", []):
+            if tg["TargetGroupName"].startswith("nlp-tg-") and (not vpc_id or tg.get("VpcId") == vpc_id) \
+                    and not tg.get("LoadBalancerArns"):
+                try:
+                    elb.delete_target_group(TargetGroupArn=tg["TargetGroupArn"])
+                    emit({"tg_deleted": tg["TargetGroupName"]})
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as e:  # noqa: BLE001
+        emit({"alb_skip": str(e)})
+    emit({"kept": "VPC / 子网 / IGW / 路由表 / 安全组 保留(可复用;GA 托管 ENI 由 GA 异步回收)"})
+    return {"region": region, "steps": steps}
 
 
 def provision_region(region: str, ami_id: str, *, vpc_id: str | None = None,

@@ -1,10 +1,21 @@
 """平台配置 + 队列只读(供 UI)。provisioning/调度写操作在 P1/P2 加入。"""
+import threading
 from fastapi import APIRouter
 from pydantic import BaseModel
 from ..core.config import get_settings
 from ..db.dynamo import get_dynamo, DEFAULT_REGIONS
+from ..services import provisioner
 
 router = APIRouter(prefix="/api")
+
+
+def _teardown_region_bg(region: str, vpc_id: str | None):
+    """后台硬删除该区 AWS 资源(GA EG/ALB/TG/ASG/LT,保留 VPC)。best-effort,日志留痕。"""
+    try:
+        r = provisioner.deprovision_region(region, vpc_id=vpc_id)
+        print(f"[deprovision] {region}: {r.get('steps')}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[deprovision] {region} error: {e}", flush=True)
 
 
 class RegionConfig(BaseModel):
@@ -42,15 +53,24 @@ async def put_config(cfg: PlatformConfig):
 @router.get("/fleet")
 async def fleet():
     d = get_dynamo()
+    # 只展示当前注册表里的区(过滤掉已移除区遗留的 FleetState/实例行,如已删的测试区)
+    active = set((d.get_config().get("regions") or {}).keys())
     # 全按需模式:不展示已弃用的 spot ASG(保留在 AWS 侧 desired=0 仅为回退)
-    fs = [f for f in d.list_fleet_state() if f.get("asg_kind") != "spot"]
-    return {"fleet_state": fs, "instances": d.list_instances()}
+    fs = [f for f in d.list_fleet_state()
+          if f.get("asg_kind") != "spot" and (not active or f.get("region") in active)]
+    inst = [i for i in d.list_instances() if (not active or i.get("region") in active)]
+    return {"fleet_state": fs, "instances": inst}
 
 
 @router.delete("/config/regions/{region}")
 async def delete_region(region: str):
-    """从区域注册表移除一个区(仅删配置项;AWS 资源需另行拆除 —— 前端应先 disable + desired=0)。"""
-    return get_dynamo().delete_config_region(region)
+    """移除一个区:从注册表删除(+ 清 FleetState)+ 后台硬删除该区 AWS 资源
+    (GA endpoint group / ALB / TG / ASG / LT),**保留 VPC/子网/SG**(可复用)。"""
+    d = get_dynamo()
+    vpc = ((d.get_config().get("regions") or {}).get(region) or {}).get("provisioned_vpc")
+    d.delete_config_region(region)
+    threading.Thread(target=_teardown_region_bg, args=(region, vpc), daemon=True).start()
+    return {"removed": region, "teardown": "started", "vpc_kept": True}
 
 
 @router.get("/regions")
