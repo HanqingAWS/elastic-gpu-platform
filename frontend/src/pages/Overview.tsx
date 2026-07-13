@@ -108,7 +108,11 @@ export default function Overview({ onNavigate }: { onNavigate?: OnNavigate }) {
             <tbody>
               {instances.length === 0 ? (
                 <tr><td colSpan={8}><Empty icon="🌙" hint="活动窗口开始后按排期自动拉起 GPU(按需);也可在「定时活动」设置基础常驻台数。">当前无运行实例</Empty></td></tr>
-              ) : [...instances].sort((a, b) => (a.terminated_at ? 1 : 0) - (b.terminated_at ? 1 : 0)).slice(0, 12).map((i) => (
+              ) : [...instances].sort((a, b) => {
+                const t = (a.terminated_at ? 1 : 0) - (b.terminated_at ? 1 : 0);  // 已终止沉底
+                if (t !== 0) return t;
+                return new Date(b.launch_time || 0).getTime() - new Date(a.launch_time || 0).getTime();  // 开机时间降序
+              }).slice(0, 12).map((i) => (
                 <tr key={i.instance_id} style={i.terminated_at ? { opacity: 0.5 } : undefined}>
                   <td>{i.instance_id}</td><td>{i.region}</td><td>{i.az}</td>
                   <td><span className="tag v">{i.type}</span></td><td>{i.lifecycle}</td>
