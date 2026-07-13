@@ -1,0 +1,22 @@
+[Unit]
+Description=vLLM inference server (serves :SERVING_PORT with /health + /metrics)
+After=network-online.target nlp-fetch-model.service
+Wants=network-online.target
+Requires=nlp-fetch-model.service
+
+[Service]
+EnvironmentFile=/etc/nlp/model.env
+# 冷启动加载大模型可达 ~15-20min,拉长引擎就绪超时,避免中途崩溃
+ExecStartPre=-/usr/bin/docker pull ${VLLM_IMAGE}
+ExecStart=/usr/bin/docker run --rm --name nlp-vllm --gpus all --network host \
+  -e VLLM_ENGINE_READY_TIMEOUT_S=3600 \
+  -v /opt/models:/models ${VLLM_IMAGE} \
+  --model /models/${MODEL_PREFIX} --port ${SERVING_PORT} \
+  --data-parallel-size ${DP} --tensor-parallel-size ${TP} \
+  --safetensors-load-strategy prefetch
+ExecStop=/usr/bin/docker stop nlp-vllm
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

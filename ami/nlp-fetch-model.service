@@ -1,0 +1,14 @@
+[Unit]
+Description=NLP fetch model from S3 to local NVMe (before vLLM)
+After=network-online.target
+Wants=network-online.target
+Before=vllm.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/nlp/model.env
+ExecStart=/usr/local/bin/nlp-fetch-model.sh
+
+[Install]
+WantedBy=multi-user.target

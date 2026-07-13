@@ -7,10 +7,12 @@
 部署:AMI 内装为 systemd 服务 nlp-metrics-push.service(见 ami/nlp-metrics-push.service),enabled。
 IAM:GPU 节点角色需 dynamodb:PutItem on nlp-dev-metrics-rollup(已加内联策略 nlp-metrics-put)。
 """
-import urllib.request as U, time, re, subprocess, json
+import os, urllib.request as U, time, re, subprocess, json
 
-TABLE = "nlp-dev-metrics-rollup"
-TABLE_REGION = "us-east-1"          # 控制面 DynamoDB 固定在 us-east-1(节点跨区写)
+# 均可由 /etc/nlp/model.env 注入(bake-ami.sh 写入);缺省回落平台默认。
+TABLE = os.getenv("METRICS_TABLE", "nlp-dev-metrics-rollup")
+TABLE_REGION = os.getenv("METRICS_TABLE_REGION", "us-east-1")   # 控制面 DynamoDB(节点跨区写)
+PORT = os.getenv("NLP_SERVING_PORT", "8000")                    # vLLM 服务/指标端口
 INTERVAL = 20
 
 
@@ -26,7 +28,7 @@ IID = imds("instance-id")
 
 
 def scrape() -> dict:
-    txt = U.urlopen("http://localhost:8000/metrics", timeout=5).read().decode()
+    txt = U.urlopen(f"http://localhost:{PORT}/metrics", timeout=5).read().decode()
     v = {"req": 0.0, "gen": 0.0, "lat_sum": 0.0, "lat_cnt": 0.0, "buckets": {}}
     for ln in txt.splitlines():
         if ln.startswith("#") or not ln.strip():
