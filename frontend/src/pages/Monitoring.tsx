@@ -1,16 +1,19 @@
 import { useState } from 'react';
 import { api } from '../services/api';
-import { useLive, Loading, Empty, Banner, REGION_LABEL, fmt } from './common';
+import { useLive, Loading, Empty, Banner, normalizeRegions, fmt } from './common';
 
 export default function Monitoring() {
   const [tab, setTab] = useState<'perf' | 'spot'>('perf');
   const { data, loading } = useLive(async () => {
-    const [m, s] = await Promise.all([api.metrics(), api.spotEvents().catch(() => null)]);
-    return { m, s };
+    const [m, s, n] = await Promise.all([
+      api.metrics(), api.spotEvents().catch(() => null), api.regions().catch(() => ({ regions: [] })),
+    ]);
+    return { m, s, regions: n.regions ?? [] };
   }, 10000);
   if (loading && !data) return <Loading />;
   const m = data?.m ?? {};
   const spot = data?.s ?? null;
+  const R = normalizeRegions(data?.regions);
 
   return (
     <>
@@ -18,12 +21,12 @@ export default function Monitoring() {
         <button className={tab === 'perf' ? 'on' : ''} onClick={() => setTab('perf')}>性能监控</button>
         <button className={tab === 'spot' ? 'on' : ''} onClick={() => setTab('spot')}>Spot 回收统计</button>
       </div>
-      {tab === 'perf' ? <Perf m={m} /> : <Spot spot={spot} />}
+      {tab === 'perf' ? <Perf m={m} R={R} /> : <Spot spot={spot} R={R} />}
     </>
   );
 }
 
-function Perf({ m }: { m: any }) {
+function Perf({ m, R }: { m: any; R: any }) {
   const s = m?.summary ?? {};
   const perRegion: any[] = m?.per_region ?? [];
   const rows: any[] = m?.instances ?? [];
@@ -38,10 +41,10 @@ function Perf({ m }: { m: any }) {
       {(!rows.length) && <Banner>Agent 每 tick 抓取各节点 <b>/metrics</b>(QPS / 延迟分位 / token 吞吐)写入 MetricsRollup(留存 90 天)。当前无运行节点,窗口开始并有实例注册后此处实时呈现。</Banner>}
       <div className="section-t">分区吞吐</div>
       <div className="grid3" style={{ marginBottom: 20 }}>
-        {(perRegion.length ? perRegion : [{ region: 'us-east-1' }, { region: 'us-east-2' }, { region: 'us-west-2' }]).map((r: any) => (
+        {(perRegion.length ? perRegion : R.ids.map((region: string) => ({ region }))).map((r: any) => (
           <div className="region-card" key={r.region}>
             <h4>{r.region}</h4>
-            <div style={{ color: 'var(--faint)', fontFamily: 'var(--mono)', fontSize: 11, marginTop: 2 }}>{REGION_LABEL[r.region] || ''}</div>
+            <div style={{ color: 'var(--faint)', fontFamily: 'var(--mono)', fontSize: 11, marginTop: 2 }}>{R.label[r.region] || ''}</div>
             <div style={{ marginTop: 12 }}>
               <div className="row"><span>QPS</span><b className="b-teal">{r.qps ?? 0}</b></div>
               <div className="row"><span>Token/s</span><b className="b-blue">{r.tokens_per_sec ?? 0}</b></div>
@@ -72,7 +75,7 @@ function Perf({ m }: { m: any }) {
   );
 }
 
-function Spot({ spot }: { spot: any }) {
+function Spot({ spot, R }: { spot: any; R: any }) {
   const sum = spot?.summary ?? {};
   const events: any[] = spot?.events ?? [];
   const byRegion: any[] = sum.by_region ?? [];
@@ -83,7 +86,7 @@ function Spot({ spot }: { spot: any }) {
       <div className="kpis">
         <div className="kpi"><div className="lbl">累计回收</div><div className="v b-rose">{sum.total ?? 0}</div><div className="d">Spot 被回收次数</div></div>
         <div className="kpi"><div className="lbl">近 30 天</div><div className="v b-amber">{sum.last_30d ?? 0}</div><div className="d">最近回收事件</div></div>
-        <div className="kpi"><div className="lbl">覆盖区域</div><div className="v">{byRegion.length}<small> / 3</small></div><div className="d">发生回收的区</div></div>
+        <div className="kpi"><div className="lbl">覆盖区域</div><div className="v">{byRegion.length}<small> / {R.ids.length}</small></div><div className="d">发生回收的区</div></div>
         <div className="kpi"><div className="lbl">数据留存</div><div className="v b-teal">{retention}<small> 天</small></div><div className="d">TTL 自动清理</div></div>
       </div>
 
@@ -93,7 +96,7 @@ function Spot({ spot }: { spot: any }) {
         <div className="card">
           <h3>按区域</h3>
           {byRegion.length === 0 ? <Empty>无</Empty> : byRegion.map((r) => (
-            <div className="kv" key={r.region}><span className="k">{r.region} <span className="faint">{REGION_LABEL[r.region] || ''}</span></span><span className="val b-rose">{r.count}</span></div>
+            <div className="kv" key={r.region}><span className="k">{r.region} <span className="faint">{R.label[r.region] || ''}</span></span><span className="val b-rose">{r.count}</span></div>
           ))}
         </div>
         <div className="card">

@@ -83,9 +83,44 @@ def find_endpoint_group_arn(accelerator_arn: str, region: str) -> str | None:
     return None
 
 
+def _first_listener_arn(accelerator_arn: str) -> str | None:
+    ga = client("globalaccelerator", "us-west-2")
+    for lp in ga.get_paginator("list_listeners").paginate(AcceleratorArn=accelerator_arn):
+        for lst in lp["Listeners"]:
+            return lst["ListenerArn"]  # 平台只有一个 443 listener
+    return None
+
+
+def create_endpoint_group(accelerator_arn: str, region: str,
+                          health_check_port: int = 80, health_check_protocol: str = "TCP",
+                          dry_run: bool = True) -> str | None:
+    """运行时为该区新建 GA endpoint group(挂到平台唯一的 443 listener)。
+    幂等:已存在(EndpointGroupAlreadyExistsException 或竞态)则回查返回现有 ARN。"""
+    existing = find_endpoint_group_arn(accelerator_arn, region)
+    if existing:
+        return existing
+    if dry_run:
+        return None
+    lst = _first_listener_arn(accelerator_arn)
+    if not lst:
+        raise RuntimeError(f"未找到 accelerator {accelerator_arn} 的 listener,无法建 {region} endpoint group")
+    ga = client("globalaccelerator", "us-west-2")
+    try:
+        eg = ga.create_endpoint_group(
+            ListenerArn=lst, EndpointGroupRegion=region,
+            HealthCheckPort=health_check_port, HealthCheckProtocol=health_check_protocol,
+        )
+        return eg["EndpointGroup"]["EndpointGroupArn"]
+    except Exception as e:  # noqa: BLE001  竞态:已被并发创建 → 回查
+        if "EndpointGroupAlreadyExists" not in str(type(e).__name__) and "AlreadyExist" not in str(e):
+            raise
+        return find_endpoint_group_arn(accelerator_arn, region)
+
+
 def register_alb(accelerator_arn: str, region: str, alb_arn: str,
                  listener_port: int = 443, endpoint_port: int = 80, dry_run: bool = True) -> dict:
-    """把 ALB 注册进该区 endpoint group。GA 监听 443,ALB 监听 80 → 用 PortOverrides 把 443 映射到 80。"""
+    """把 ALB 注册进该区 endpoint group。GA 监听 443,ALB 监听 80 → 用 PortOverrides 把 443 映射到 80。
+    endpoint group 不存在则运行时创建(健康检查端口 = ALB 监听端口),支持自助扩区、无需 cdk deploy。"""
     if dry_run:
         eg_arn = None
         try:
@@ -95,15 +130,21 @@ def register_alb(accelerator_arn: str, region: str, alb_arn: str,
         return {"planned": f"register ALB into GA endpoint group ({region}) ClientIPPreservation=True, "
                            f"portOverride {listener_port}->{endpoint_port}", "endpoint_group_arn": eg_arn}
     eg_arn = find_endpoint_group_arn(accelerator_arn, region)
+    created = False
+    if not eg_arn:  # 缺则建(运行时扩区)——健康检查端口用 ALB 监听端口
+        eg_arn = create_endpoint_group(accelerator_arn, region,
+                                       health_check_port=endpoint_port, dry_run=False)
+        created = eg_arn is not None
     if not eg_arn:
-        raise RuntimeError(f"未找到 {region} 的 GA endpoint group(检查 GA 栈是否覆盖该区)")
+        raise RuntimeError(f"无法为 {region} 找到或创建 GA endpoint group")
     ga = client("globalaccelerator", "us-west-2")
     ga.update_endpoint_group(
         EndpointGroupArn=eg_arn,
         EndpointConfigurations=[{"EndpointId": alb_arn, "Weight": 100, "ClientIPPreservationEnabled": True}],
         PortOverrides=[{"ListenerPort": listener_port, "EndpointPort": endpoint_port}],
     )
-    return {"endpoint_group_arn": eg_arn, "port_override": f"{listener_port}->{endpoint_port}"}
+    return {"endpoint_group_arn": eg_arn, "port_override": f"{listener_port}->{endpoint_port}",
+            "endpoint_group_created": created}
 
 
 def wait_global_accelerator_sg(region: str, vpc_id: str, timeout_s: int = 180) -> str | None:

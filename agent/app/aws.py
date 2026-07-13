@@ -100,14 +100,22 @@ def set_desired(region: str, asg_name: str, desired: int):
         AutoScalingGroupName=asg_name, DesiredCapacity=max(0, min(8, int(desired))), HonorCooldown=False)
 
 
-@functools.lru_cache(maxsize=None)
+_EG_ARN_CACHE: dict[tuple[str, str], str] = {}  # 只缓存命中,不缓存 None
+
+
 def find_endpoint_group_arn(accelerator_arn: str, region: str) -> str | None:
-    """GA 是全局服务,控制端点在 us-west-2。缓存 region->endpoint group arn。"""
+    """GA 是全局服务,控制端点在 us-west-2。**命中才缓存(绝不缓存 None)**:
+    否则运行时新加的区,其 endpoint group 建好之前若查过一次,None 会被永久缓存,
+    该区 GA 权重(TrafficDial)从此再也不下发,直到进程重启。"""
+    key = (accelerator_arn, region)
+    if key in _EG_ARN_CACHE:
+        return _EG_ARN_CACHE[key]
     ga = _c("globalaccelerator", "us-west-2")
     try:
         for lst in ga.list_listeners(AcceleratorArn=accelerator_arn)["Listeners"]:
             for eg in ga.list_endpoint_groups(ListenerArn=lst["ListenerArn"])["EndpointGroups"]:
                 if eg["EndpointGroupRegion"] == region:
+                    _EG_ARN_CACHE[key] = eg["EndpointGroupArn"]
                     return eg["EndpointGroupArn"]
     except Exception:  # noqa: BLE001
         return None

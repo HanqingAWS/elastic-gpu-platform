@@ -125,6 +125,7 @@ export class EcsStack extends cdk.Stack {
 
     const alb = new elbv2.ApplicationLoadBalancer(this, 'Alb', {
       vpc: props.vpc, internetFacing: true, securityGroup: props.albSecurityGroup as ec2.SecurityGroup,
+      loadBalancerName: 'nlp-dev-cp-alb',  // 固定名(此前控制面 ALB 被带外删除;显式命名以触发 CFN 重建并稳定 DNS)
     });
     const listener = alb.addListener('Http', { port: 80, protocol: elbv2.ApplicationProtocol.HTTP, open: false });
     listener.addTargets('WebTg', {

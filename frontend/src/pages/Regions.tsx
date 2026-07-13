@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../services/api';
-import { useLive, Loading, Banner, Empty, REGION_LABEL, REGIONS } from './common';
+import { useLive, Loading, Banner, Empty, normalizeRegions } from './common';
 
 // UTC+8(Asia/Shanghai)日期 —— 与页面显示一致
 const sgDay = (offset = 0) => new Date(Date.now() + offset * 86400000 + 8 * 3600000).toISOString().slice(0, 10);
@@ -12,11 +12,12 @@ export default function Regions() {
       api.regions(), api.fleet(),
       api.runningHours(range.from || undefined, range.to || undefined).catch(() => ({ today: [], by_day: [], totals: {} })),
     ]);
-    return { regions: r.regions ?? REGIONS, fleet: f.fleet_state ?? [], cost: c };
+    return { regions: r.regions ?? [], fleet: f.fleet_state ?? [], cost: c };
   }, 15000, `${range.from}|${range.to}`);
   if (loading && !data) return <Loading />;
 
-  const regions: string[] = data?.regions ?? REGIONS;
+  const R = normalizeRegions(data?.regions);
+  const regions: string[] = R.ids;
   const fleet: any[] = data?.fleet ?? [];
   const cost: any = data?.cost ?? { today: [], by_day: [], totals: {} };
   const todayH: Record<string, any> = {};
@@ -48,12 +49,12 @@ export default function Regions() {
           const d = per[r] || { spot: 0, od: 0 };
           const h = d.spot + d.od;
           const w = weight(r);
-          const preferred = r === 'us-east-1';
+          const preferred = r === R.priorityRegion;
           return (
             <div className="region-card" key={r}>
               <h4>{r}<span className={`dot ${h > 0 ? 'g' : 'm'}`} /></h4>
               <div style={{ color: 'var(--faint)', fontFamily: 'var(--mono)', fontSize: 11, marginTop: 2 }}>
-                {REGION_LABEL[r]}{preferred ? ' ★' : ''}
+                {R.label[r]}{preferred ? ' ★' : ''}
               </div>
               <div className="bar"><i style={{ width: `${Math.min(100, (h / peak) * 100)}%` }} /></div>
               <div style={{ marginTop: 14 }}>

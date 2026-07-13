@@ -97,7 +97,7 @@ input:focus{border-color:var(--g1);box-shadow:0 0 0 3px rgba(99,102,241,.18)}
 .b-blue{color:var(--blue)} .b-teal{color:var(--teal)} .b-amber{color:var(--amber)} .b-rose{color:var(--rose)} .b-green{color:var(--green)}
 
 .section-t{font-size:14px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:26px 0 14px}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
 .card{background:var(--surface);border:1px solid var(--border);border-top-color:rgba(255,255,255,.05);
   border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(0,0,0,.24)}
 .region-card{background:linear-gradient(180deg,var(--surface),var(--surface2));border:1px solid var(--border);

@@ -14,27 +14,16 @@ export default function Schedules() {
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [types, setTypes] = useState('');
-  const [typesSaved, setTypesSaved] = useState('');
   const load = async () => {
     const [sch, cfg] = await Promise.all([api.getSchedules().catch(() => ({ schedules: [] })), api.getConfig().catch(() => ({}))]);
     setList(sch.schedules || []);
     const b = Number(cfg.base_count ?? 0); setBase(b); setBaseSaved(b);
-    const t = (cfg.instance_type_priority || ['p4d.24xlarge', 'p4de.24xlarge']).join(', ');
-    setTypes(t); setTypesSaved(t);
   };
   useEffect(() => { load(); }, []);
 
   const saveBase = async () => {
     setBusy(true); setToast(null);
     try { await api.putConfig({ base_count: Number(base) }); setBaseSaved(Number(base)); setToast({ ok: true, msg: '基础数量已保存 ✓' }); }
-    catch (e: any) { setToast({ ok: false, msg: e.message }); } finally { setBusy(false); }
-  };
-  const saveTypes = async () => {
-    setBusy(true); setToast(null);
-    const arr = types.split(',').map((x) => x.trim()).filter(Boolean);
-    if (!arr.length) { setToast({ ok: false, msg: '至少填一个机型' }); setBusy(false); return; }
-    try { await api.putConfig({ instance_type_priority: arr }); setTypesSaved(arr.join(', ')); setTypes(arr.join(', ')); setToast({ ok: true, msg: '机型优先级已保存 ✓(对已建区域:去配置向导重跑「创建资源」即生效)' }); }
     catch (e: any) { setToast({ ok: false, msg: e.message }); } finally { setBusy(false); }
   };
   const saveActivity = async () => {
@@ -68,19 +57,6 @@ export default function Schedules() {
             ⚠ 当前基础为 0 且无活动 —— 集群将始终保持 0 台。请设置基础数量,或在下方新建一个定时活动。
           </div>
         )}
-        <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
-          <div className="hint" style={{ margin: '0 0 6px' }}>GPU 机型优先级(全按需拉起;逗号分隔,<b>顺序即优先级</b> —— 排前面的先开,开不出自动用下一个)</div>
-          <div className="actions" style={{ marginTop: 0 }}>
-            <div className="field" style={{ flex: 1, maxWidth: 420, marginBottom: 0 }}>
-              <input value={types} onChange={(e) => setTypes(e.target.value)} placeholder="p4d.24xlarge, p4de.24xlarge" />
-            </div>
-            <button className="btn btn-sm" onClick={saveTypes} disabled={busy || types === typesSaved}>保存机型优先级</button>
-          </div>
-          <div className="subnav" style={{ marginTop: 8 }}>
-            <button className={types.replace(/\s/g, '') === 'p4d.24xlarge,p4de.24xlarge' ? 'on' : ''} onClick={() => setTypes('p4d.24xlarge, p4de.24xlarge')}>p4d 优先(默认)</button>
-            <button className={types.replace(/\s/g, '') === 'p4de.24xlarge,p4d.24xlarge' ? 'on' : ''} onClick={() => setTypes('p4de.24xlarge, p4d.24xlarge')}>p4de 优先</button>
-          </div>
-        </div>
       </div>
 
       {!editing && (

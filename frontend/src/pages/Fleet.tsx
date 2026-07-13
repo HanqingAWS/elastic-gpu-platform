@@ -37,7 +37,11 @@ export default function Fleet() {
             <tbody>
               {instances.length === 0 ? (
                 <tr><td colSpan={8}><Empty>🌙 当前无运行实例 —— 活动窗口开始后自动拉起 GPU(按需)</Empty></td></tr>
-              ) : [...instances].sort((a, b) => (a.terminated_at ? 1 : 0) - (b.terminated_at ? 1 : 0)).map((i) => (
+              ) : [...instances].sort((a, b) => {
+                const t = (a.terminated_at ? 1 : 0) - (b.terminated_at ? 1 : 0);  // 已终止沉底
+                if (t !== 0) return t;
+                return new Date(b.launch_time || 0).getTime() - new Date(a.launch_time || 0).getTime();  // 开机时间降序
+              }).map((i) => (
                 <tr key={i.instance_id} style={i.terminated_at ? { opacity: 0.5 } : undefined}>
                   <td>{i.instance_id}</td><td>{i.region}</td><td>{i.az}</td>
                   <td><span className="tag v">{i.type}</span></td>

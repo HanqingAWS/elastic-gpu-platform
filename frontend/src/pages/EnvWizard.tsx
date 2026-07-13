@@ -13,6 +13,8 @@ export default function EnvWizard() {
   const [open, setOpen] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [g, setG] = useState<{ net: any[]; cfg: any; ga: any; status: Record<string, any> } | null>(null);
+  const [nr, setNr] = useState({ region: '', label: '', priority: '' });  // 新增区域表单
+  const [adding, setAdding] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -23,12 +25,15 @@ export default function EnvWizard() {
         api.ga().catch(() => null),
       ]);
       const sels = net.selections || [];
+      const cfgRegions = cfg.regions || {};
+      // 区域列表来自 Config 注册表(含未启用),空则回退硬编码基线
+      const rlist = Object.keys(cfgRegions).length ? Object.keys(cfgRegions) : REGIONS;
       const status: Record<string, any> = {};
-      await Promise.all(REGIONS.map(async (r) => {
+      await Promise.all(rlist.map(async (r) => {
         const sel = sels.find((x: any) => x.region === r);
         status[r] = await api.regionStatus(r, sel?.vpc_id || undefined).catch(() => null);
       }));
-      if (alive) setG({ net: sels, cfg: cfg.regions || {}, ga, status });
+      if (alive) setG({ net: sels, cfg: cfgRegions, ga, status });
     })();
     return () => { alive = false; };
   }, [tick]);
@@ -44,7 +49,31 @@ export default function EnvWizard() {
     return saved ? 'blue' : 'gray';
   };
 
-  const anyGreen = g ? REGIONS.some((r) => stateOf(r) === 'green') : false;
+  // 区域列表 = Config 注册表 keys,按 priority 升序;标签/优先区从注册表派生(回退硬编码常量)
+  const regionList: string[] = g && Object.keys(g.cfg).length
+    ? Object.keys(g.cfg).sort((a, b) =>
+        (Number(g.cfg[a]?.priority ?? 99) - Number(g.cfg[b]?.priority ?? 99)) || a.localeCompare(b))
+    : REGIONS;
+  const labelOf = (r: string) => (g?.cfg?.[r]?.label) || REGION_LABEL[r] || r;
+  const priorityRegion = regionList[0];  // 已按 priority 排序,首个即最高优先
+  const anyGreen = g ? regionList.some((r) => stateOf(r) === 'green') : false;
+
+  const addRegion = async () => {
+    const region = nr.region.trim();
+    if (!region) return;
+    setAdding('add');
+    try {
+      await api.putConfig({ regions: { [region]: {
+        label: nr.label.trim() || region,
+        priority: nr.priority.trim() ? Number(nr.priority) : 99,
+        enabled: false,  // 先加进注册表,设 AMI/网络并 provision 后再启用
+      } } });
+      setNr({ region: '', label: '', priority: '' });
+      setTick((t) => t + 1);
+      setOpen(region);  // 直接打开该区抽屉配置
+    } catch { /* toast 在抽屉内;此处静默 */ }
+    finally { setAdding(null); }
+  };
 
   return (
     <>
@@ -55,6 +84,22 @@ export default function EnvWizard() {
         <b style={{ color: 'var(--teal)' }}> 绿=已创建(ASG 存在)</b>。
         链路 <b>Global Accelerator → 各区 ALB → GPU ASG(按需)</b>;台数不在此设置,去「定时活动」配置。
       </Banner>
+
+      {/* 新增区域:加进注册表(默认未启用)→ 打开抽屉配 AMI/网络 → 创建资源(运行时自动建 GA endpoint group)→ 启用 */}
+      <div className="card" style={{ padding: 12, marginBottom: 14 }}>
+        <div className="inline" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 160px', margin: 0 }}><label>新增区域(AWS 区域码)</label>
+            <input placeholder="如 eu-central-1" value={nr.region} onChange={(e) => setNr({ ...nr, region: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 120px', margin: 0 }}><label>显示名</label>
+            <input placeholder="如 法兰克福" value={nr.label} onChange={(e) => setNr({ ...nr, label: e.target.value })} /></div>
+          <div className="field" style={{ flex: '0 0 100px', margin: 0 }}><label>优先级(小=优先)</label>
+            <input type="number" placeholder="99" value={nr.priority} onChange={(e) => setNr({ ...nr, priority: e.target.value })} /></div>
+          <button className="btn btn-sm" onClick={addRegion} disabled={!nr.region.trim() || !!adding}>{adding ? '添加中…' : '添加区域'}</button>
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>加区无需 cdk deploy —— 创建数据面资源时会运行时新建该区 GA endpoint group。新区默认未启用,配好并创建后在抽屉里勾选「启用该区」。</div>
+      </div>
+
+      <GlobalTypes />
 
       <div className="topo">
         {/* GA 根节点 */}
@@ -69,16 +114,17 @@ export default function EnvWizard() {
 
         {/* 三区列 */}
         <div className="topo-cols">
-          {REGIONS.map((r) => {
+          {regionList.map((r) => {
             const s = stateOf(r);
             const st = g?.status?.[r];
-            const preferred = r === 'us-east-1';
+            const preferred = r === priorityRegion;
+            const disabled = g?.cfg?.[r]?.enabled === false;
             return (
               <div className="topo-col" key={r}>
                 <div className="topo-drop" />
                 <div className={`tnode clickable tn-${s}`} onClick={() => setOpen(r)} title="点击配置该区">
-                  <div className="tn-t">{r} {preferred ? <span className="star">★</span> : null}</div>
-                  <div className="tn-s faint">{REGION_LABEL[r]} · ALB</div>
+                  <div className="tn-t">{r} {preferred ? <span className="star">★</span> : null}{disabled ? <span className="faint" style={{ fontSize: 11 }}> · 未启用</span> : null}</div>
+                  <div className="tn-s faint">{labelOf(r)} · ALB</div>
                   <div className={`tn-badge b-${s}`}>{STATE_LABEL[s]}</div>
                   {st?.alb?.exists ? <div className="tn-s mono faint">ALB {st.alb.state}</div> : null}
                 </div>
@@ -100,6 +146,44 @@ export default function EnvWizard() {
   );
 }
 
+// ---------- 全局机型优先级(全按需 · 顺序即优先级;各区可在抽屉里单独覆盖)----------
+function GlobalTypes() {
+  const [types, setTypes] = useState('');
+  const [saved, setSaved] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      const t = (c.instance_type_priority || ['p4d.24xlarge', 'p4de.24xlarge']).join(', ');
+      setTypes(t); setSaved(t);
+    }).catch(() => { /* */ });
+  }, []);
+  const norm = (s: string) => s.replace(/\s/g, '');
+  const save = async () => {
+    const arr = types.split(',').map((x) => x.trim()).filter(Boolean);
+    if (!arr.length) { setMsg({ ok: false, t: '至少填一个机型' }); return; }
+    setBusy(true);
+    try {
+      await api.putConfig({ instance_type_priority: arr });
+      setSaved(arr.join(', ')); setTypes(arr.join(', '));
+      setMsg({ ok: true, t: '已保存 ✓(对已建区域:去该区抽屉重跑「创建资源」生效)' });
+    } catch (e: any) { setMsg({ ok: false, t: e.message }); } finally { setBusy(false); }
+  };
+  return (
+    <div className="card" style={{ padding: 12, marginBottom: 14 }}>
+      <div className="section-t" style={{ margin: '0 0 8px' }}>全局机型优先级 <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>全按需 · 顺序即优先级(排前先开,开不出用下一个)· 各区可在抽屉里单独覆盖</span></div>
+      <div className="inline" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div className="field" style={{ flex: '1 1 260px', margin: 0 }}>
+          <input value={types} onChange={(e) => setTypes(e.target.value)} placeholder="p4d.24xlarge, p4de.24xlarge" /></div>
+        <button className={`btn btn-sm ${norm(types) === 'p4d.24xlarge,p4de.24xlarge' ? 'on' : ''}`} onClick={() => setTypes('p4d.24xlarge, p4de.24xlarge')}>p4d 优先</button>
+        <button className={`btn btn-sm ${norm(types) === 'p4de.24xlarge,p4d.24xlarge' ? 'on' : ''}`} onClick={() => setTypes('p4de.24xlarge, p4d.24xlarge')}>p4de 优先</button>
+        <button className="btn btn-sm" onClick={save} disabled={busy || types === saved}>{busy ? '保存中…' : '保存'}</button>
+        {msg && <span className={`toast ${msg.ok ? 'ok' : 'err'}`}>{msg.t}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ---------- 单区配置抽屉 ----------
 function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose: () => void; onChanged: () => void }) {
   const [loaded, setLoaded] = useState(false);
@@ -117,6 +201,9 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   const [servingPort, setServingPort] = useState(8000);
   const [healthPath, setHealthPath] = useState('/health');
   const [enabled, setEnabled] = useState(true);
+  const [label, setLabel] = useState('');
+  const [priority, setPriority] = useState<number>(99);
+  const [instTypes, setInstTypes] = useState('');   // 按区机型覆盖(逗号分隔;空=继承全局)
   const [busy, setBusy] = useState<string | null>(null);
   const [steps, setSteps] = useState<any[]>([]);
   const [rstat, setRstat] = useState<any>(null);
@@ -144,6 +231,8 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
       const rc = (cfg.regions || {})[region] || {};
       setAmiArn(rc.ami_arn || ''); setServingPort(rc.serving_port || 8000);
       setHealthPath(rc.health_path || '/health'); setEnabled(rc.enabled ?? true);
+      setLabel(rc.label || REGION_LABEL[region] || ''); setPriority(rc.priority ?? 99);
+      setInstTypes((rc.instance_types || []).join(', '));
       setLoaded(true);
       api.regionStatus(region, sel?.vpc_id || undefined).then(setRstat).catch(() => {});
     })();
@@ -164,11 +253,22 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
     setToast(null);
     try {
       await api.putNetwork({ region, vpc_id: createNew ? null : vpcId, subnet_ids: createNew ? [] : selSubnets, create_new: createNew, sg_id: createNew ? null : (sgId || null), key_name: keyName || null });
-      await api.putConfig({ regions: { [region]: { ami_arn: amiArn, serving_port: Number(servingPort), health_path: healthPath, enabled: enabled && !!amiArn } } });
+      await api.putConfig({ regions: { [region]: {
+        ami_arn: amiArn, serving_port: Number(servingPort), health_path: healthPath, enabled: enabled && !!amiArn,
+        label: label.trim() || region, priority: Number(priority),
+        instance_types: instTypes.split(',').map((x) => x.trim()).filter(Boolean),  // 空数组=继承全局
+      } } });
       return true;
     } catch (e: any) { setToast({ ok: false, msg: e.message }); return false; }
   };
   const save = async () => { setBusy('save'); if (await saveAll()) { setToast({ ok: true, msg: '配置已保存 ✓' }); onChanged(); } setBusy(null); };
+
+  const removeRegion = async () => {
+    if (!window.confirm(`从注册表移除 ${region}?\n\n只删配置项,不会拆除已建的 ASG / ALB / VPC / GA endpoint group。\n若该区已创建资源,请先把 desired 归零并另行清理,以免继续计费。`)) return;
+    setBusy('remove');
+    try { await api.deleteRegion(region); onChanged(); onClose(); }
+    catch (e: any) { setToast({ ok: false, msg: e.message }); setBusy(null); }
+  };
 
   const provision = async () => {
     setBusy('provision'); setSteps([]);
@@ -210,7 +310,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-head">
           <div>
-            <h3 style={{ margin: 0 }}>{region} <span className="faint" style={{ fontWeight: 400, fontSize: 13 }}>· {REGION_LABEL[region]}</span></h3>
+            <h3 style={{ margin: 0 }}>{region} <span className="faint" style={{ fontWeight: 400, fontSize: 13 }}>· {label || REGION_LABEL[region] || region}</span></h3>
             <div className="faint" style={{ fontSize: 12, marginTop: 3 }}>
               资源状态:{created ? <b className="b-teal">已创建 ✓(按需 ASG 存在)</b>
                 : rstat?.state === 'partial' ? <b className="b-amber">部分,需重新创建补齐</b>
@@ -300,6 +400,18 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
             <label className="chk"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> 启用该区</label>
             {enabled && !amiArn && <div className="hint" style={{ color: 'var(--amber)', marginTop: 4 }}>需填 AMI 才能启用。</div>}
 
+            {/* 区域元数据:显示名 / 优先级 / 按区机型覆盖 */}
+            <div className="section-t" style={{ marginTop: 18 }}>4 · 区域(显示名 / 优先级 / 机型)</div>
+            <div className="inline">
+              <div className="field" style={{ flex: 1 }}><label>显示名</label>
+                <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={region} /></div>
+              <div className="field" style={{ flex: 1 }}><label>优先级(小=优先拉起,0 最高)</label>
+                <input type="number" value={priority} onChange={(e) => setPriority(Number(e.target.value))} /></div>
+            </div>
+            <div className="field"><label>机型优先级 · 按区覆盖(逗号分隔,顺序即优先级;<b>留空=继承全局</b>)</label>
+              <input value={instTypes} onChange={(e) => setInstTypes(e.target.value)} placeholder="留空继承全局(如 p4d.24xlarge, p4de.24xlarge)" /></div>
+            <div className="hint">该区不提供所填机型时,创建资源会报错;系统会按该区实际供给过滤(如 EU 无 p4de 自动跳过)。</div>
+
             {steps.length > 0 && (
               <div style={{ marginTop: 16 }}>
                 <div className="section-t" style={{ margin: '0 0 8px' }}>创建进度</div>
@@ -314,6 +426,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
         )}
 
         <div className="drawer-foot">
+          <button className="btn btn-sm btn-ghost" onClick={removeRegion} disabled={!!busy} title="从注册表移除该区(不拆 AWS 资源)" style={{ color: 'var(--rose, #f43f5e)', marginRight: 'auto' }}>{busy === 'remove' ? '移除中…' : '移除区域'}</button>
           <button className="btn btn-sm btn-ghost" onClick={save} disabled={!!busy || blockOpen}>{busy === 'save' ? '暂存中…' : '暂存'}</button>
           <button className="btn btn-sm" onClick={provision} disabled={!!busy || !amiArn || blockOpen}>
             {busy === 'provision' ? '创建中…' : created ? '重新创建 / 补齐' : '创建数据面资源'}

@@ -1,5 +1,5 @@
 import { api } from '../services/api';
-import { useLive, Loading, Empty, REGION_LABEL, REGIONS, healthClass } from './common';
+import { useLive, Loading, Empty, normalizeRegions, healthClass } from './common';
 import type { OnNavigate } from './Dashboard';
 
 export default function Overview({ onNavigate }: { onNavigate?: OnNavigate }) {
@@ -9,13 +9,14 @@ export default function Overview({ onNavigate }: { onNavigate?: OnNavigate }) {
       api.getSchedules().catch(() => ({ schedules: [] })), api.network().catch(() => ({ selections: [] })),
     ]);
     return {
-      regions: r.regions ?? REGIONS, fleet: f.fleet_state ?? [], instances: f.instances ?? [],
+      regions: r.regions ?? [], fleet: f.fleet_state ?? [], instances: f.instances ?? [],
       cfg: c ?? {}, metrics: m.summary ?? {}, schedules: s.schedules ?? [], selections: n.selections ?? [],
     };
   }, 15000);
   if (loading && !data) return <Loading />;
 
-  const regions: string[] = data?.regions ?? REGIONS;
+  const R = normalizeRegions(data?.regions);
+  const regions: string[] = R.ids;
   const fleet: any[] = data?.fleet ?? [];
   const instances: any[] = data?.instances ?? [];
   const cfg: any = data?.cfg ?? {};
@@ -38,7 +39,12 @@ export default function Overview({ onNavigate }: { onNavigate?: OnNavigate }) {
   // ---- 接入完整性 ----
   const cfgRegions = cfg.regions || {};
   const amiDone = regions.filter((r) => cfgRegions[r]?.ami_arn && cfgRegions[r]?.enabled);
-  const netDone = (selections || []).filter((s: any) => s.create_new || s.vpc_id);
+  // 一个区算「网络就绪」= 已 provision(Config 有 provisioned_vpc)或向导里存过 VPC 选择;
+  // 直接调 provision(未走向导存选择)的区靠 provisioned_vpc 计入,与环境向导「已创建」口径一致。
+  const netDone = regions.filter((r) =>
+    cfgRegions[r]?.provisioned_vpc ||
+    (selections || []).some((s: any) => s.region === r && (s.create_new || s.vpc_id)),
+  );
   const capDone = base > 0 || schedules.some((s: any) => s.enabled);
   const steps = [
     { key: 'ami', label: '模型 / AMI', sub: '每区填入 AMI ARN 并启用', done: amiDone.length, total: regions.length, view: 'env' as const },
@@ -79,11 +85,11 @@ export default function Overview({ onNavigate }: { onNavigate?: OnNavigate }) {
         {regions.map((r) => {
           const d = per[r] || { spot: 0, od: 0 };
           const h = d.spot + d.od;
-          const preferred = r === 'us-east-1';
+          const preferred = r === R.priorityRegion;
           return (
             <div className="region-card" key={r}>
               <h4>{r}<span className={`dot ${h > 0 ? 'g' : 'm'}`} /></h4>
-              <div className="sub">{REGION_LABEL[r]}{preferred ? ' ★' : ''}</div>
+              <div className="sub">{R.label[r]}{preferred ? ' ★' : ''}</div>
               <div className="bar"><i style={{ width: `${Math.min(100, (h / peak) * 100)}%` }} /></div>
               <div style={{ marginTop: 14 }}>
                 <div className="row"><span>健康节点(按需)</span><b className="b-teal">{h}</b></div>

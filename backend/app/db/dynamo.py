@@ -5,6 +5,33 @@ from typing import Any
 import boto3
 from ..core.config import get_settings
 
+# 区域注册表基线(label + 优先级单一来源;须与 agent control_loop.PRIORITY、前端 common.tsx 对齐)。
+# priority 升序 = 越优先(0 最高)。Config.regions 为空时用它播种;已有区缺 label/priority 时读时补齐。
+DEFAULT_REGIONS: dict[str, dict[str, Any]] = {
+    "eu-north-1": {"label": "斯德哥尔摩", "priority": 0},
+    "us-east-1": {"label": "弗吉尼亚", "priority": 1},
+    "us-east-2": {"label": "俄亥俄", "priority": 2},
+    "us-west-2": {"label": "俄勒冈", "priority": 3},
+}
+
+
+def _seed_regions() -> dict[str, Any]:
+    """空 Config 时的基线区域集(仅 label/priority/enabled,无 AMI —— 未 provision)。"""
+    return {r: {"label": v["label"], "priority": v["priority"], "enabled": True}
+            for r, v in DEFAULT_REGIONS.items()}
+
+
+def _backfill_regions(regions: dict[str, Any]) -> dict[str, Any]:
+    """对已有区补齐缺失的 label/priority/enabled —— 只补缺失,绝不覆盖 ami_arn/provisioned_vpc 等。"""
+    for r, rc in regions.items():
+        if not isinstance(rc, dict):
+            continue
+        d = DEFAULT_REGIONS.get(r, {})
+        rc.setdefault("label", d.get("label", r))
+        rc.setdefault("priority", d.get("priority", 99))
+        rc.setdefault("enabled", True)
+    return regions
+
 
 class Dynamo:
     def __init__(self):
@@ -22,10 +49,12 @@ class Dynamo:
         default_model = "global.anthropic.claude-sonnet-4-6"
         default_types = ["p4d.24xlarge", "p4de.24xlarge"]  # 机型优先级(可配置):p4d 优先、p4de 次之
         if not item:
-            return {"config_id": config_id, "regions": {}, "base_count": 0,
+            return {"config_id": config_id, "regions": _seed_regions(), "base_count": 0,
                     "agent_enabled": True, "agent_model_id": default_model,
                     "instance_type_priority": default_types}
         item.setdefault("regions", {})
+        # 区域注册表:空则播种基线 4 区;非空则读时补齐缺失的 label/priority/enabled(不动已存字段)
+        item["regions"] = _backfill_regions(item["regions"]) if item["regions"] else _seed_regions()
         item.setdefault("base_count", 0)
         item.setdefault("agent_enabled", True)
         item.setdefault("agent_model_id", default_model)
@@ -45,6 +74,18 @@ class Dynamo:
         merged["updated_at"] = int(time.time())
         self._t(self.s.table_config).put_item(Item=merged)
         return merged
+
+    def delete_config_region(self, region: str) -> dict[str, Any]:
+        """从区域注册表删除一个区(put_config 的深合并删不掉 key,故用专用方法)。
+        仅删注册表项;不拆该区 AWS 资源(ASG/ALB/VPC/GA endpoint group 需另行清理)。"""
+        cur = self.get_config()
+        regions = {**(cur.get("regions") or {})}
+        regions.pop(region, None)
+        cur["regions"] = regions
+        cur["config_id"] = "default"
+        cur["updated_at"] = int(time.time())
+        self._t(self.s.table_config).put_item(Item=cur)
+        return cur
 
     # ---- Schedules(活动窗口排期) ----
     def list_schedules(self) -> list[dict]:

@@ -28,7 +28,7 @@ export interface EnvironmentConfig {
 
 const base = {
   region: 'us-east-1',
-  dataPlaneRegions: ['us-east-1', 'us-east-2', 'us-west-2'],
+  dataPlaneRegions: ['us-east-1', 'us-east-2', 'us-west-2', 'eu-north-1'],
   vpcCidr: '10.20.0.0/16',
   maxAzs: 2,
   containerPort: 8000,

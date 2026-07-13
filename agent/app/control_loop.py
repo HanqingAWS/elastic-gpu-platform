@@ -14,7 +14,7 @@ ENABLED = True
 
 _target_since: float | None = None   # 目标(target>0)持续到现在的单调起点,用于跨区溢出 / OD 兜底的 grace
 _seen_spot_events: set[str] = set()  # 进程内去重,避免每 tick 重复写同一回收事件
-PRIORITY = ["us-east-1", "us-east-2", "us-west-2"]  # 拉起优先级:us-east-1 优先,其余仅兜底溢出
+PRIORITY = ["eu-north-1", "us-east-1", "us-east-2", "us-west-2"]  # 拉起优先级:EU 客户 → eu-north-1 优先,US 靠后兜底(eu-central-2/苏黎世无 p4d 供给,已排除)
 _last_dials: dict[str, int] = {}      # 上次已下发的 GA TrafficDial,权重没变就不重复调用/审计
 _last_desired: dict[str, int] = {}    # 上次已下发的 ASG desired,值没变就不重复调用/审计
 _last_accrual: float | None = None    # 上次计量运行时长的单调时钟点(用真实经过时间累加,而非固定 tick)
@@ -79,7 +79,9 @@ def observe_region(region: str) -> dict:
         out[f"{kind}_desired"] = desired
         out[f"{kind}_healthy"] = healthy
         out["instances"].extend(insts)
-        state.put_fleet_state(region, kind, desired, healthy)
+        # 全按需:只记录 od 的 fleet_state 供展示;仍观测 spot(act_gpu 用它做归零安全网),但不落库/不展示
+        if kind == "od":
+            state.put_fleet_state(region, kind, desired, healthy)
     # 补开机时间(EC2 LaunchTime;ASG 记录里没有)
     det = aws.instance_details(region, [i["instance_id"] for i in out["instances"]])
     for inst in out["instances"]:
@@ -104,14 +106,38 @@ def _reconcile_terminated(region: str, current: list[dict]) -> None:
     _last_seen[region] = {i["instance_id"]: i for i in current if not i.get("terminated_at")}
 
 
-def allocate(all_obs: list[dict], target: int, overdue: bool) -> dict[str, int]:
-    """跨区配额分配(总共 target 台,全按需,按 PRIORITY 就近优先):
+def _regions_and_priority(cfg: dict) -> tuple[list[str], list[str]]:
+    """从 Config 派生 (动作区集合, 优先级顺序)。
+    动作区 = enabled 且**已 provision(有 provisioned_vpc)**的区 —— provisioned-gate:
+    避免 enabled 但还没建资源的高优先区在 allocate 里白拿 target(act_gpu 会指向不存在的 ASG)。
+    Config 无可用区(或异常)时回退 (CFG.regions env, 模块 PRIORITY)。"""
+    regs = cfg.get("regions") or {}
+    active = [r for r, rc in regs.items()
+              if isinstance(rc, dict) and rc.get("enabled", True) and rc.get("provisioned_vpc")]
+    if not active:
+        return list(CFG.regions), list(PRIORITY)
+
+    def _prio(r: str) -> int:
+        p = (regs.get(r) or {}).get("priority")
+        if p is not None:
+            try:
+                return int(p)
+            except (TypeError, ValueError):
+                pass
+        return PRIORITY.index(r) if r in PRIORITY else 999
+    ordered = sorted(active, key=lambda r: (_prio(r), r))
+    return ordered, ordered
+
+
+def allocate(all_obs: list[dict], target: int, overdue: bool, priority: list[str] | None = None) -> dict[str, int]:
+    """跨区配额分配(总共 target 台,全按需,按 priority 就近优先):
     us-east-1 与 us-east-2(俄亥俄)同属美东,均为优先区 —— 按序先在美东开满;
     仅当美东两区过 grace 仍凑不满(按需容量不足)时,才溢出到 us-west-2(俄勒冈,较远)。
     缺口用「已拉起(running)」抵扣,而非「已健康」—— 优先区已开出机器(即便还在加载模型未健康)
     就不再往下一区溢出,避免"边启动边多开"(此前 over-provision 的根因)。"""
     obsmap = {o["region"]: o for o in all_obs}
-    order = [r for r in PRIORITY if r in obsmap] + [r for r in obsmap if r not in PRIORITY]
+    prio = priority if priority is not None else PRIORITY
+    order = [r for r in prio if r in obsmap] + [r for r in obsmap if r not in prio]
     alloc = {r: 0 for r in obsmap}
     remaining = target
     for i, r in enumerate(order):
@@ -152,6 +178,7 @@ def tick():
     cfg = state.get_config()
     ENABLED = bool(cfg.get("agent_enabled", True))  # 唯一开关:启用/暂停(UI 可改,无需重部署)
     base = int(cfg.get("base_count", 0) or 0)              # 基础(常驻)台数
+    regions, priority = _regions_and_priority(cfg)   # 区域+优先级来自 Config(可 UI 改,无需重部署)
     sched = scheduler.evaluate(state.list_schedules())
     active = sched["prewarm"] or sched["window_open"]
     target = base + (sched["activity"] if active else 0)  # 全局总目标(跨区共 N 台)= 基础 + 活动
@@ -164,7 +191,7 @@ def tick():
     elapsed_h = 0.0 if _last_accrual is None else min(now - _last_accrual, 3 * TICK_SEC) / 3600.0
     # 1) 先观测所有区(不动作)
     all_obs = []
-    for region in CFG.regions:
+    for region in regions:
         try:
             obs = observe_region(region)
             collect_spot_events(region)
@@ -177,7 +204,7 @@ def tick():
     total_healthy = sum(o["spot_healthy"] + o["od_healthy"] for o in all_obs)
     # 2) 跨区配额分配(美东优先、其余兜底溢出)→ 逐区维持按需 GPU ASG(全按需,无 Spot/兜底二层结构)
     if ENABLED and all_obs:
-        alloc = allocate(all_obs, target, overdue)
+        alloc = allocate(all_obs, target, overdue, priority)
         for obs in all_obs:
             try:
                 act_gpu(obs["region"], obs, alloc.get(obs["region"], 0))
@@ -206,7 +233,8 @@ def tick():
         from .agent import decide
         decide(f"边缘态,请给稳健动作。观测={all_obs} 排期={sched}")
     print(f"[loop] enabled={ENABLED} window={sched['window_open']} prewarm={sched['prewarm']} "
-          f"target={target} healthy={total_healthy} overdue={overdue}", flush=True)
+          f"target={target} healthy={total_healthy} overdue={overdue} "
+          f"regions={len(regions)} prio={priority}", flush=True)
 
 
 def run_forever():

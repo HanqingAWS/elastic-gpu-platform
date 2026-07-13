@@ -27,6 +27,7 @@ export const api = {
   // fleet / regions
   fleet: () => req<any>('/fleet'),
   regions: () => req<any>('/regions'),
+  deleteRegion: (region: string) => req<any>(`/config/regions/${encodeURIComponent(region)}`, { method: 'DELETE' }),
   runs: () => req<any>('/runs'),
   // monitoring
   metrics: () => req<any>('/metrics'),
