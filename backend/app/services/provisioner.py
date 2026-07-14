@@ -301,6 +301,8 @@ def provision_region(region: str, ami_id: str, *, mode: str = "auto", vpc_id: st
                               metrics_port=metrics_port, dry_run=dry_run, emit=emit, steps=steps, s=s)
 
     # ===== auto 模式(原有全自动):=====
+    # GA:CDK 不再建 GA → 优先用界面所选/Config 的 GA,回落 env,再回落 DRYRUN 占位(与 byo 路径一致)
+    ga_arn = ga_accelerator_arn or s.ga_accelerator_arn or "arn:aws:globalaccelerator::DRYRUN"
     # 1) VPC/子网
     if vpc_id and subnet_ids:
         net = {"vpc_id": vpc_id, "subnets": [{"subnet_id": x} for x in subnet_ids]}
@@ -358,7 +360,7 @@ def provision_region(region: str, ami_id: str, *, mode: str = "auto", vpc_id: st
     emit({"self_ingress": ec2.authorize_self_ingress(region, sg_id, serving_port, dry_run=dry_run)})
 
     # 6) 注册 GA endpoint(client IP preservation;GA 443 → ALB 80 端口映射)
-    reg = ga.register_alb(s.ga_accelerator_arn or "arn:aws:globalaccelerator::DRYRUN", region,
+    reg = ga.register_alb(ga_arn, region,
                           alb.get("alb_arn", "arn:alb:DRYRUN"),
                           listener_port=443, endpoint_port=ALB_LISTENER_PORT, dry_run=dry_run)
     emit({"ga_register": reg})
