@@ -63,9 +63,12 @@ function Topo({ data }: { data: any }) {
 }
 
 export default function GlobalAccelerator() {
-  // GA 不再由 CDK 建 → 页面不自动选任何 GA。默认预选 Config 里 provision 时所选的平台 GA;否则留空由用户下拉自选。
+  // GA 不再由 CDK 建 → 页面不自动选任何 GA。默认预选 Config 里的默认 GA;可在此选一个并「设为默认」写入 Config(agent 按它下发权重)。
   const [selectedArn, setSelectedArn] = useState<string>('');
+  const [defaultArn, setDefaultArn] = useState<string>('');   // 当前 Config.ga_accelerator_arn
   const [accels, setAccels] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string>('');
 
   useEffect(() => {
     let alive = true;
@@ -75,7 +78,9 @@ export default function GlobalAccelerator() {
     ]).then(([cfg, ac]: any[]) => {
       if (!alive) return;
       setAccels(ac.accelerators || []);
-      if (cfg?.ga_accelerator_arn) setSelectedArn(cfg.ga_accelerator_arn);
+      const cur = cfg?.ga_accelerator_arn || '';
+      setDefaultArn(cur);
+      setSelectedArn(cur);
     });
     return () => { alive = false; };
   }, []);
@@ -86,14 +91,36 @@ export default function GlobalAccelerator() {
     selectedArn,
   );
 
+  const isDefault = !!selectedArn && selectedArn === defaultArn;
+  const saveDefault = async () => {
+    if (!selectedArn || isDefault) return;
+    setSaving(true); setMsg('');
+    try {
+      await api.putConfig({ ga_accelerator_arn: selectedArn });
+      setDefaultArn(selectedArn);
+      setMsg('已设为默认 GA ✓（Agent 将按它下发各区 TrafficDial 权重;provision 也默认注册到它）');
+    } catch (e: any) {
+      setMsg(`保存失败:${e.message}`);
+    } finally { setSaving(false); }
+  };
+
   return (
     <>
-      <div className="field" style={{ maxWidth: 680, marginBottom: 14 }}>
-        <label>选择 Global Accelerator（默认为已配置的平台 GA;账号内全部 GA 供选）</label>
-        <select value={selectedArn} onChange={(e) => setSelectedArn(e.target.value)}>
-          <option value="">— 请选择 GA —</option>
-          {accels.map((g) => <option key={g.arn} value={g.arn}>{g.name} · {g.dns}</option>)}
-        </select>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3>默认 Global Accelerator</h3>
+        <p className="hint" style={{ margin: '0 0 8px' }}>选一个 GA 设为平台默认:Agent 按它下发各区 TrafficDial 权重,provision 时也默认注册到它。平台不自动展示账号内其它工作负载的 GA。</p>
+        <div className="inline" style={{ maxWidth: 760 }}>
+          <select value={selectedArn} onChange={(e) => { setSelectedArn(e.target.value); setMsg(''); }} style={{ flex: 1 }}>
+            <option value="">— 请选择 GA —</option>
+            {accels.map((g) => <option key={g.arn} value={g.arn}>{g.name} · {g.dns}{g.arn === defaultArn ? '（当前默认）' : ''}</option>)}
+          </select>
+          <button className="btn btn-sm" onClick={saveDefault} disabled={saving || !selectedArn || isDefault} style={{ width: 'auto' }}>
+            {saving ? '保存中…' : isDefault ? '已是默认' : '设为默认 GA'}
+          </button>
+        </div>
+        {msg && <div className="hint" style={{ marginTop: 8, color: msg.includes('失败') ? 'var(--amber)' : 'var(--teal)' }}>{msg}</div>}
+        {defaultArn ? <div className="arn" style={{ marginTop: 6 }}>当前默认:{defaultArn}</div>
+          : <div className="hint faint" style={{ marginTop: 6 }}>尚未设置默认 GA。</div>}
       </div>
 
       {!selectedArn ? (
