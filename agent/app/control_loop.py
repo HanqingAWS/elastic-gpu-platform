@@ -15,7 +15,7 @@ ENABLED = True
 _target_since: float | None = None   # 目标(target>0)持续到现在的单调起点,用于跨区溢出 / OD 兜底的 grace
 _seen_spot_events: set[str] = set()  # 进程内去重,避免每 tick 重复写同一回收事件
 PRIORITY = ["eu-north-1", "us-east-1", "us-east-2", "us-west-2"]  # 拉起优先级:EU 客户 → eu-north-1 优先,US 靠后兜底(eu-central-2/苏黎世无 p4d 供给,已排除)
-_last_dials: dict[str, int] = {}      # 上次已下发的 GA TrafficDial,权重没变就不重复调用/审计
+_last_dials: dict[tuple[str, str], int] = {}   # (ga_arn, region) → 上次已下发的 TrafficDial;权重没变才跳过。含 ga_arn:换 GA/EG 后强制重下发(否则旧 GA 的残留值会误跳过新 EG)
 _last_desired: dict[str, int] = {}    # 上次已下发的 ASG desired,值没变就不重复调用/审计
 _last_accrual: float | None = None    # 上次计量运行时长的单调时钟点(用真实经过时间累加,而非固定 tick)
 
@@ -218,15 +218,16 @@ def tick():
         from .actions import _set_ga_weights
         from .tools.guardrails import GuardrailError
         for region, dial in compute_dials(all_obs).items():
-            if _last_dials.get(region) == dial:
+            key = (ga_arn, region)   # 含 GA:换 GA/EG 后强制重下发(旧 GA 残留值不再误跳过新 EG)
+            if _last_dials.get(key) == dial:
                 continue  # 权重未变化:不重复调用、不刷审计(避免 Agent 日志被 set_ga_weights 刷屏)
             eg = aws.find_endpoint_group_arn(ga_arn, region)
             if not eg:
                 continue
             try:
                 _set_ga_weights(region=region, dry_run=False, endpoint_group_arn=eg, traffic_dial=dial,
-                                before=_last_dials.get(region), reason="按各区健康台数占比重算 TrafficDial")
-                _last_dials[region] = dial
+                                before=_last_dials.get(key), reason="按各区健康台数占比重算 TrafficDial")
+                _last_dials[key] = dial
             except GuardrailError:
                 pass
 
