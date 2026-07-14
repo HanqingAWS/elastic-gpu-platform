@@ -37,6 +37,7 @@ class PlatformConfig(BaseModel):
     timezone: str | None = None
     agent_enabled: bool | None = None         # false=暂停(只观测不干预)
     agent_model_id: str | None = None         # Agent 决策用的 Bedrock model id
+    ga_accelerator_arn: str | None = None     # 所选 GA(默认平台的);agent 权重逻辑读它
 
 
 @router.get("/config")

@@ -58,6 +58,11 @@ export const api = {
   provisionStatus: (runId: string) => req<any>(`/provisioning/provision-status?run_id=${encodeURIComponent(runId)}`),
   regionStatus: (region: string, vpcId?: string) =>
     req<any>(`/provisioning/status?region=${encodeURIComponent(region)}${vpcId ? `&vpc_id=${encodeURIComponent(vpcId)}` : ''}`),
+  albs: (region: string, vpcId?: string) =>
+    req<any>(`/provisioning/albs?region=${encodeURIComponent(region)}${vpcId ? `&vpc_id=${encodeURIComponent(vpcId)}` : ''}`),
+  accelerators: () => req<any>('/provisioning/accelerators'),
+  createAccelerator: (name: string) => req<any>('/provisioning/accelerator', { method: 'POST', body: JSON.stringify({ name }) }),
+  validate: (body: any) => req<any>('/provisioning/validate', { method: 'POST', body: JSON.stringify(body) }),
   // agent
   agentActions: (date?: string) => req<any>(`/agent/actions${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   testModel: (modelId: string) => req<any>('/agent/test-model', { method: 'POST', body: JSON.stringify({ model_id: modelId }) }),

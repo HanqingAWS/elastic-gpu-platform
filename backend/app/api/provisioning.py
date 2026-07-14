@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from ..services.aws import ec2
+from ..services.aws import ec2, elbv2, ga
 from ..services import provisioner
 from ..db.dynamo import get_dynamo
 
@@ -41,24 +41,69 @@ async def key_pairs(region: str = Query(...)):
     return {"region": region, "key_pairs": ec2.list_key_pairs(region)}
 
 
+@router.get("/albs")
+async def albs(region: str = Query(...), vpc_id: str | None = Query(None)):
+    """选 VPC 后自动 list 该 VPC 的 ALB 供 BYO 下拉(返回 scheme,UI 标注/校验公网)。"""
+    return {"region": region, "vpc_id": vpc_id, "albs": elbv2.list_load_balancers(region, vpc_id)}
+
+
+@router.get("/accelerators")
+async def accelerators():
+    """列所有 GA accelerator 供下拉选择(默认平台的)。"""
+    return {"accelerators": ga.list_accelerators()}
+
+
+class CreateGaReq(BaseModel):
+    name: str
+
+
+@router.post("/accelerator")
+async def create_accelerator(req: CreateGaReq):
+    """运行时新建 GA(非 CDK)+ 443 listener,返回新 ARN 供选择。"""
+    return ga.create_accelerator(req.name, dry_run=False)
+
+
 class ProvisionReq(BaseModel):
     region: str
     ami_id: str
-    vpc_id: str | None = None          # 选现有;为空则新建 VPC
-    subnet_ids: list[str] | None = None
-    sg_id: str | None = None           # 选现有安全组;为空则自动创建(锁定策略)
-    key_name: str | None = None        # 选现有密钥对;为空则不注入密钥
+    mode: str = "auto"                  # auto=平台全自动建 ALB/GA;byo=用现有公网 ALB + 选定 GA
+    vpc_id: str | None = None           # 选现有;为空则新建 VPC(auto)
+    subnet_ids: list[str] | None = None  # auto:ALB(每AZ一)+ ASG 都用它
+    asg_subnet_ids: list[str] | None = None  # byo:ASG 用的私有子网
+    alb_arn: str | None = None          # byo:现有公网 ALB
+    ga_accelerator_arn: str | None = None  # 选定的 GA(默认平台的)
+    sg_id: str | None = None            # 选现有安全组;为空则自动创建(锁定策略)
+    key_name: str | None = None         # 选现有密钥对;为空则不注入密钥
     serving_port: int = 8000
     health_path: str = "/health"
     metrics_port: int = 8000
     dry_run: bool = False
 
 
+class ValidateReq(BaseModel):
+    region: str
+    alb_arn: str
+    ga_accelerator_arn: str | None = None
+    asg_subnet_ids: list[str] | None = None
+    node_sg_id: str | None = None
+    serving_port: int = 8000
+    autofix: bool = True
+
+
+@router.post("/validate")
+async def validate(req: ValidateReq):
+    """BYO 校验 + 分级处理(自动补安全组/listener,其余风险点告警)。"""
+    return {"region": req.region, "checks": provisioner.validate_region(
+        req.region, req.alb_arn, req.ga_accelerator_arn, asg_subnet_ids=req.asg_subnet_ids,
+        node_sg_id=req.node_sg_id, serving_port=req.serving_port, autofix=req.autofix)}
+
+
 def _run_provision(run_id: str, req: ProvisionReq) -> None:
     """后台线程:真正执行 provision(阻塞的 boto3 + 等待器都在此线程,不碰事件循环)。"""
     try:
         result = provisioner.provision_region(
-            req.region, req.ami_id, vpc_id=req.vpc_id, subnet_ids=req.subnet_ids,
+            req.region, req.ami_id, mode=req.mode, vpc_id=req.vpc_id, subnet_ids=req.subnet_ids,
+            asg_subnet_ids=req.asg_subnet_ids, alb_arn=req.alb_arn, ga_accelerator_arn=req.ga_accelerator_arn,
             sg_id=req.sg_id, key_name=req.key_name,
             serving_port=req.serving_port, health_path=req.health_path,
             metrics_port=req.metrics_port, dry_run=req.dry_run,
@@ -67,11 +112,14 @@ def _run_provision(run_id: str, req: ProvisionReq) -> None:
         with _RUNS_LOCK:
             _RUNS[run_id].update(status="succeeded", finished=True,
                                  vpc_id=result.get("vpc_id"), steps=result.get("steps", []))
-        # 标记该区“资源已创建”(供向导显示资源状态);失败不影响主结果
+        # 标记该区“资源已创建”+ 记下所选 GA(agent 权重逻辑读它);失败不影响主结果
         try:
-            get_dynamo().put_config({"regions": {req.region: {
+            patch = {"regions": {req.region: {
                 "provisioned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "provisioned_vpc": result.get("vpc_id")}}})
+                "provisioned_vpc": result.get("vpc_id")}}}
+            if req.ga_accelerator_arn:
+                patch["ga_accelerator_arn"] = req.ga_accelerator_arn
+            get_dynamo().put_config(patch)
         except Exception:  # noqa: BLE001
             pass
     except Exception as e:  # noqa: BLE001

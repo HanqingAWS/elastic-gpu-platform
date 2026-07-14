@@ -46,10 +46,20 @@ export class EcsStack extends cdk.Stack {
     const gpuNodeRole = new iam.Role(this, 'GpuNodeRole', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
       managedPolicies: [
+        // 免密钥登录(SSM Session Manager);私有子网需 NAT 或 SSM VPC endpoint 才可达
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
         iam.ManagedPolicy.fromAwsManagedPolicyName('CloudWatchAgentServerPolicy'),
       ],
     });
+    // 节点运行时需要:从 S3 拉模型 + 向控制面 DynamoDB 推指标(此前仅线上手动加,现纳入 CDK)
+    gpuNodeRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject', 's3:ListBucket'],
+      resources: ['arn:aws:s3:::nlp-models-*', 'arn:aws:s3:::nlp-models-*/*'],
+    }));
+    gpuNodeRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:PutItem'],
+      resources: [`arn:aws:dynamodb:*:${cdk.Stack.of(this).account}:table/*-metrics-rollup`],
+    }));
     const gpuNodeProfile = new iam.CfnInstanceProfile(this, 'GpuNodeProfile', {
       roles: [gpuNodeRole.roleName],
     });

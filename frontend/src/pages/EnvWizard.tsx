@@ -211,23 +211,35 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   const [steps, setSteps] = useState<any[]>([]);
   const [rstat, setRstat] = useState<any>(null);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [mode, setMode] = useState<'auto' | 'byo'>('byo');   // 默认 BYO(用现有公网 ALB + 选 GA)
+  const [albs, setAlbs] = useState<any[]>([]);
+  const [albArn, setAlbArn] = useState('');
+  const [accels, setAccels] = useState<any[]>([]);
+  const [gaArn, setGaArn] = useState('');                    // '' = 平台默认 GA
+  const [checks, setChecks] = useState<any[] | null>(null);  // 校验结果
 
   useEffect(() => {
     (async () => {
-      const [net, cfg, kp, vp] = await Promise.all([
+      const [net, cfg, kp, vp, ac] = await Promise.all([
         api.network().catch(() => ({ selections: [] })), api.getConfig().catch(() => ({})),
         api.keyPairs(region).catch(() => ({ key_pairs: [] })), api.vpcs(region).catch(() => ({ vpcs: null })),
+        api.accelerators().catch(() => ({ accelerators: [] })),
       ]);
       setKeys(kp.key_pairs || []);
       if (vp.vpcs) setVpcs(vp.vpcs);
+      setAccels(ac.accelerators || []);
       const sel = (net.selections || []).find((x: any) => x.region === region);
       if (sel) {
-        setCreateNew(!!sel.create_new); setVpcId(sel.vpc_id || ''); setSelSubnets(sel.subnet_ids || []);
+        setCreateNew(!!sel.create_new); setVpcId(sel.vpc_id || '');
         setSgId(sel.sg_id || ''); setKeyName(sel.key_name || '');
+        if (sel.mode) setMode(sel.mode);
+        setAlbArn(sel.alb_arn || ''); setGaArn(sel.ga_accelerator_arn || '');
+        setSelSubnets((sel.mode === 'byo' ? sel.asg_subnet_ids : sel.subnet_ids) || sel.subnet_ids || []);
         if (sel.vpc_id && !sel.create_new) {
           try {
-            const [gr, s] = await Promise.all([api.securityGroups(region, sel.vpc_id), api.subnets(region, sel.vpc_id)]);
-            setSgs(gr.security_groups || []); setSubnets(s.subnets || []);
+            const [gr, s, al] = await Promise.all([
+              api.securityGroups(region, sel.vpc_id), api.subnets(region, sel.vpc_id), api.albs(region, sel.vpc_id)]);
+            setSgs(gr.security_groups || []); setSubnets(s.subnets || []); setAlbs(al.albs || []);
           } catch { /* */ }
         }
       }
@@ -242,10 +254,11 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   }, [region]);
 
   const pickVpc = async (id: string) => {
-    setVpcId(id); setCreateNew(false); setSelSubnets([]); setSgId(''); setBusy('subnets'); setSubnets([]); setSgs([]);
+    setVpcId(id); setCreateNew(false); setSelSubnets([]); setSgId(''); setAlbArn(''); setBusy('subnets'); setSubnets([]); setSgs([]); setAlbs([]);
     try {
       const r = await api.subnets(region, id); setSubnets(r.subnets || []);
       const gr = await api.securityGroups(region, id); setSgs(gr.security_groups || []);
+      const al = await api.albs(region, id); setAlbs(al.albs || []);   // BYO:选 VPC 后自动列该 VPC 的 ALB
     } catch (e: any) { setToast({ ok: false, msg: e.message }); }
     finally { setBusy(null); }
   };
@@ -255,7 +268,14 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   const saveAll = async (): Promise<boolean> => {
     setToast(null);
     try {
-      await api.putNetwork({ region, vpc_id: createNew ? null : vpcId, subnet_ids: createNew ? [] : selSubnets, create_new: createNew, sg_id: createNew ? null : (sgId || null), key_name: keyName || null });
+      await api.putNetwork({
+        region, mode, vpc_id: createNew ? null : vpcId, create_new: createNew && mode === 'auto',
+        subnet_ids: mode === 'byo' ? [] : (createNew ? [] : selSubnets),
+        asg_subnet_ids: mode === 'byo' ? selSubnets : [],
+        alb_arn: mode === 'byo' ? (albArn || null) : null,
+        ga_accelerator_arn: gaArn || null,
+        sg_id: createNew && mode === 'auto' ? null : (sgId || null), key_name: keyName || null,
+      });
       await api.putConfig({ regions: { [region]: {
         ami_arn: amiArn, serving_port: Number(servingPort), health_path: healthPath, enabled: enabled && !!amiArn,
         label: label.trim() || region, priority: Number(priority),
@@ -265,6 +285,23 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
     } catch (e: any) { setToast({ ok: false, msg: e.message }); return false; }
   };
   const save = async () => { setBusy('save'); if (await saveAll()) { setToast({ ok: true, msg: '配置已保存 ✓' }); onChanged(); } setBusy(null); };
+
+  const validate = async () => {
+    setBusy('validate'); setChecks(null); setToast(null);
+    try {
+      const r = await api.validate({ region, alb_arn: albArn, ga_accelerator_arn: gaArn || null,
+        asg_subnet_ids: selSubnets, node_sg_id: sgId || null, serving_port: Number(servingPort) });
+      setChecks(r.checks || []);
+    } catch (e: any) { setToast({ ok: false, msg: e.message }); }
+    finally { setBusy(null); }
+  };
+  const newGa = async () => {
+    const name = window.prompt('新建 GA 名称:', `nlp-byo-${region}`);
+    if (!name) return;
+    setBusy('newga');
+    try { const r = await api.createAccelerator(name.trim()); setGaArn(r.accelerator_arn); const ac = await api.accelerators(); setAccels(ac.accelerators || []); setToast({ ok: true, msg: `已新建 GA ${r.accelerator_arn}` }); }
+    catch (e: any) { setToast({ ok: false, msg: e.message }); } finally { setBusy(null); }
+  };
 
   const removeRegion = async () => {
     if (!window.confirm(`移除 ${region}?\n\n将从注册表删除,并在后台拆除该区 AWS 资源:GA endpoint group / ALB / TargetGroup / ASG / 启动模板。\n保留 VPC / 子网 / 安全组(可复用;之后可重新添加并创建资源)。\n拆除约需 1–2 分钟,Global Accelerator 页稍后会更新。`)) return;
@@ -278,12 +315,15 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
     if (!(await saveAll())) { setBusy(null); return; }
     setToast({ ok: true, msg: '已提交,后台创建中(约 1–3 分钟,可留在本页看进度)…' });
     try {
-      const { run_id } = await api.provision({
-        region, ami_id: amiArn, vpc_id: createNew ? null : (vpcId || null),
-        subnet_ids: createNew ? null : (selSubnets.length ? selSubnets : null),
-        sg_id: createNew ? null : (sgId || null), key_name: keyName || null,
-        serving_port: Number(servingPort), health_path: healthPath, metrics_port: Number(servingPort), dry_run: false,
-      });
+      const common = { region, ami_id: amiArn, sg_id: sgId || null, key_name: keyName || null,
+        ga_accelerator_arn: gaArn || null, serving_port: Number(servingPort), health_path: healthPath,
+        metrics_port: Number(servingPort), dry_run: false };
+      const body = mode === 'byo'
+        ? { ...common, mode: 'byo', vpc_id: vpcId || null, alb_arn: albArn || null, asg_subnet_ids: selSubnets }
+        : { ...common, mode: 'auto', vpc_id: createNew ? null : (vpcId || null),
+            subnet_ids: createNew ? null : (selSubnets.length ? selSubnets : null),
+            sg_id: createNew ? null : (sgId || null) };
+      const { run_id } = await api.provision(body);
       let st: any = null;
       for (let i = 0; i < 160; i++) {          // 轮询最长约 8 分钟
         await new Promise((res) => setTimeout(res, 3000));
@@ -325,11 +365,19 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
 
         {!loaded ? <div className="loading">加载中…</div> : (
           <div className="drawer-body">
+            {/* 模式:BYO(默认)/ auto */}
+            <div className="subnav" style={{ marginBottom: 12 }}>
+              <button className={mode === 'byo' ? 'on' : ''} onClick={() => setMode('byo')}>BYO:现有公网 ALB / GA(默认)</button>
+              <button className={mode === 'auto' ? 'on' : ''} onClick={() => { setMode('auto'); setAlbArn(''); }}>平台自动创建</button>
+            </div>
+            {mode === 'byo' && <div className="hint" style={{ marginBottom: 8 }}>自己在公有子网建好 internet-facing ALB;这里选它 + 选 GA,并给 ASG 选<b>私有子网</b>。平台建 TG/监听器/ASG 并校验,不建 ALB/VPC。</div>}
             {/* VPC */}
             <div className="section-t">1 · 网络(VPC / 子网)</div>
-            <label className="chk" style={{ marginBottom: 8 }}>
-              <input type="checkbox" checked={createNew} onChange={(e) => { setCreateNew(e.target.checked); if (e.target.checked) { setVpcId(''); setSelSubnets([]); } }} /> 新建 VPC(自动建 10.30/16 + 每 AZ 公有子网)
-            </label>
+            {mode === 'auto' && (
+              <label className="chk" style={{ marginBottom: 8 }}>
+                <input type="checkbox" checked={createNew} onChange={(e) => { setCreateNew(e.target.checked); if (e.target.checked) { setVpcId(''); setSelSubnets([]); } }} /> 新建 VPC(自动建 10.30/16 + 每 AZ 公有子网)
+              </label>
+            )}
             {createNew ? (
               <div className="chip">provision 时自动创建 VPC / 子网 / 路由,无需选择</div>
             ) : vpcs === null ? <div className="faint" style={{ fontSize: 13 }}>加载 VPC…</div>
@@ -347,13 +395,16 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
               busy === 'subnets' ? <div className="faint" style={{ marginTop: 8 }}>加载子网…</div>
                 : subnets.length === 0 ? <Empty>该 VPC 无子网</Empty> : (
                   <>
-                    <div className="hint" style={{ marginTop: 10 }}>选子网(建议多 AZ;ALB 会自动每 AZ 取一个)。已选 {selSubnets.length} 个。</div>
+                    <div className="hint" style={{ marginTop: 10 }}>
+                      {mode === 'byo' ? <>给 ASG(GPU 实例)选<b>私有子网</b>(标 🔒);实例走私有子网,需 VPC 有 NAT/VPC endpoint 出网。</> : '选子网(建议多 AZ;ALB 会自动每 AZ 取一个)。'} 已选 {selSubnets.length} 个。
+                    </div>
                     <div className="picklist" style={{ maxHeight: 150 }}>
                       {subnets.map((sn) => {
                         const on = selSubnets.includes(sn.subnet_id);
                         return (
                           <label key={sn.subnet_id} className={`pick-row ${on ? 'sel' : ''}`}>
-                            <span className="left"><input type="checkbox" checked={on} onChange={() => toggleSubnet(sn.subnet_id)} /><span className="mono">{sn.subnet_id}</span></span>
+                            <span className="left"><input type="checkbox" checked={on} onChange={() => toggleSubnet(sn.subnet_id)} /><span className="mono">{sn.subnet_id}</span>
+                              <span className="tag" style={{ marginLeft: 6, background: sn.public ? 'rgba(251,191,36,.12)' : 'rgba(52,211,153,.12)', color: sn.public ? 'var(--amber)' : 'var(--teal)', border: 'none' }}>{sn.public ? '公有' : `私有·${sn.egress === 'nat' ? 'NAT' : '无出网'}`}</span></span>
                             <span className="faint mono" style={{ fontSize: 12 }}>{sn.az} · {sn.cidr}</span>
                           </label>
                         );
@@ -361,6 +412,28 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
                     </div>
                   </>
                 )
+            )}
+
+            {/* 1b · BYO:现有公网 ALB + GA */}
+            {mode === 'byo' && !createNew && vpcId && (
+              <>
+                <div className="section-t" style={{ marginTop: 18 }}>1b · 现有公网 ALB + GA(BYO)</div>
+                <div className="field"><label>公网 ALB(选 VPC 后自动列出该 VPC 内的 ALB)</label>
+                  <select value={albArn} onChange={(e) => setAlbArn(e.target.value)}>
+                    <option value="">— 选择 ALB —</option>
+                    {albs.map((a) => <option key={a.alb_arn} value={a.alb_arn}>{a.name} · {a.scheme}{a.scheme !== 'internet-facing' ? ' ⚠非公网' : ''}</option>)}
+                  </select></div>
+                {albArn && albs.find((a) => a.alb_arn === albArn && a.scheme !== 'internet-facing') && (
+                  <div className="hint" style={{ color: 'var(--amber)' }}>该 ALB 非 internet-facing,请改用公网 ALB。</div>)}
+                <div className="field"><label>Global Accelerator</label>
+                  <div className="inline">
+                    <select value={gaArn} onChange={(e) => setGaArn(e.target.value)} style={{ flex: 1 }}>
+                      <option value="">平台默认 GA</option>
+                      {accels.map((g) => <option key={g.arn} value={g.arn}>{g.name} · {g.dns}</option>)}
+                    </select>
+                    <button className="btn btn-sm btn-ghost" onClick={newGa} disabled={!!busy} style={{ width: 'auto' }}>{busy === 'newga' ? '新建中…' : '+ 新建 GA'}</button>
+                  </div></div>
+              </>
             )}
 
             {/* SG + key */}
@@ -415,6 +488,25 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
               <input value={instTypes} onChange={(e) => setInstTypes(e.target.value)} placeholder="留空继承全局(如 p4d.24xlarge, p4de.24xlarge)" /></div>
             <div className="hint">该区不提供所填机型时,创建资源会报错;系统会按该区实际供给过滤(如 EU 无 p4de 自动跳过)。</div>
 
+            {/* 5 · 校验(BYO):GA→ALB 连通 / 安全组 / 私有子网出网 */}
+            {mode === 'byo' && (
+              <>
+                <div className="section-t" style={{ marginTop: 18 }}>5 · 校验(GA→ALB / 安全组 / 私有子网出网)</div>
+                <div className="hint" style={{ margin: '0 0 6px' }}>建议 provision 前先校验。安全组缺口自动补(不重复);其余风险点(私有子网无出网、ALB 非公网、监听器冲突)按提示手动改。</div>
+                <button className="btn btn-sm btn-ghost" onClick={validate} disabled={!!busy || !albArn} style={{ width: 'auto' }}>{busy === 'validate' ? '校验中…' : '运行校验'}</button>
+                {checks && (
+                  <div className="picklist" style={{ maxHeight: 240, marginTop: 8 }}>
+                    {checks.length === 0 ? <div className="chip">无检查项</div> : checks.map((c, i) => (
+                      <div key={i} className="pick-row" style={{ alignItems: 'flex-start' }}>
+                        <span className="left"><span style={{ width: 20 }}>{c.status === 'ok' ? '✅' : c.status === 'fixed' ? '🔧' : c.status === 'warn' ? '⚠️' : '❌'}</span><span className="mono">{c.name}</span></span>
+                        <span className="faint" style={{ fontSize: 12, textAlign: 'right', maxWidth: '62%' }}>{c.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
             {steps.length > 0 && (
               <div style={{ marginTop: 16 }}>
                 <div className="section-t" style={{ margin: '0 0 8px' }}>创建进度</div>
@@ -431,7 +523,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
         <div className="drawer-foot">
           <button className="btn btn-sm btn-ghost" onClick={removeRegion} disabled={!!busy} title="移除并拆除该区 GA/ALB/ASG(保留 VPC 可复用)" style={{ color: 'var(--rose, #f43f5e)', marginRight: 'auto' }}>{busy === 'remove' ? '移除中…' : '移除区域'}</button>
           <button className="btn btn-sm btn-ghost" onClick={save} disabled={!!busy || blockOpen}>{busy === 'save' ? '暂存中…' : '暂存'}</button>
-          <button className="btn btn-sm" onClick={provision} disabled={!!busy || !amiArn || blockOpen}>
+          <button className="btn btn-sm" onClick={provision} disabled={!!busy || !amiArn || blockOpen || (mode === 'byo' && (!albArn || !vpcId || selSubnets.length === 0))}>
             {busy === 'provision' ? '创建中…' : created ? '重新创建 / 补齐' : '创建数据面资源'}
           </button>
           {toast && <span className={`toast ${toast.ok ? 'ok' : 'err'}`}>{toast.msg}</span>}

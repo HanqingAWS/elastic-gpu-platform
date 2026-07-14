@@ -53,3 +53,73 @@ def create_alb_with_tg(region: str, vpc_id: str, subnet_ids: list[str], sg_id: s
         if "DuplicateListener" not in str(e):
             raise
     return {"alb_arn": alb["LoadBalancerArn"], "alb_dns": alb["DNSName"], "tg_arn": tg["TargetGroupArn"]}
+
+
+# ---- BYO(自带 ALB)+ 发现 + 校验 用的辅助 ----
+
+def list_load_balancers(region: str, vpc_id: str | None = None) -> list[dict]:
+    """列 application LB(供向导下拉);vpc_id 给定则只列该 VPC。返回 scheme 供 UI 标注/校验。"""
+    elb = client("elbv2", region)
+    out = []
+    for lb in elb.describe_load_balancers().get("LoadBalancers", []):
+        if lb.get("Type") != "application":
+            continue
+        if vpc_id and lb.get("VpcId") != vpc_id:
+            continue
+        out.append({"alb_arn": lb["LoadBalancerArn"], "name": lb["LoadBalancerName"], "dns": lb["DNSName"],
+                    "scheme": lb["Scheme"], "vpc_id": lb.get("VpcId"),
+                    "sgs": lb.get("SecurityGroups", []), "state": lb["State"]["Code"]})
+    return out
+
+
+def describe_alb(region: str, alb_arn: str) -> dict:
+    """拿 ALB 的 VPC / SG / AZ / scheme(BYO 时用来接 TG、配 SG、校验)。"""
+    lb = client("elbv2", region).describe_load_balancers(LoadBalancerArns=[alb_arn])["LoadBalancers"][0]
+    return {"alb_arn": alb_arn, "alb_dns": lb["DNSName"], "vpc_id": lb["VpcId"], "scheme": lb["Scheme"],
+            "sgs": lb.get("SecurityGroups", []), "state": lb["State"]["Code"],
+            "azs": [z["ZoneName"] for z in lb.get("AvailabilityZones", [])]}
+
+
+def create_target_group(region: str, vpc_id: str, serving_port: int, health_path: str,
+                        name: str | None = None, dry_run: bool = True) -> dict:
+    """建 TG(HTTP/serving_port,/health,LOR)。幂等复用同名。BYO 与 auto 共用。"""
+    tg_name = (name or f"nlp-tg-{vpc_id[-6:]}")[:32]
+    if dry_run:
+        return {"planned": f"create TG {tg_name} (instance,{serving_port},{health_path})", "tg_arn": "tg-DRYRUN"}
+    elb = client("elbv2", region)
+    try:
+        tg = elb.create_target_group(Name=tg_name, Protocol="HTTP", Port=serving_port, VpcId=vpc_id,
+                                     TargetType="instance", HealthCheckPath=health_path,
+                                     HealthCheckIntervalSeconds=15, HealthyThresholdCount=2,
+                                     UnhealthyThresholdCount=2)["TargetGroups"][0]
+    except Exception as e:  # noqa: BLE001
+        if "DuplicateTargetGroupName" not in str(e):
+            raise
+        tg = elb.describe_target_groups(Names=[tg_name])["TargetGroups"][0]
+    elb.modify_target_group_attributes(TargetGroupArn=tg["TargetGroupArn"], Attributes=[
+        {"Key": "load_balancing.algorithm.type", "Value": "least_outstanding_requests"},
+        {"Key": "deregistration_delay.timeout_seconds", "Value": "60"}])
+    return {"tg_arn": tg["TargetGroupArn"], "tg_name": tg_name}
+
+
+def ensure_listener_forward(region: str, alb_arn: str, port: int, tg_arn: str, dry_run: bool = True) -> dict:
+    """确保客户 ALB 在 port 上有 listener 转发到 tg_arn。无→建;已转发到本 TG→ok;转发到别的 TG→冲突(只报不覆盖)。"""
+    if dry_run:
+        return {"planned": f"ensure listener :{port} -> {tg_arn}"}
+    elb = client("elbv2", region)
+    listeners = elb.describe_listeners(LoadBalancerArn=alb_arn).get("Listeners", [])
+    existing = next((l for l in listeners if l.get("Port") == port), None)
+    if not existing:
+        elb.create_listener(LoadBalancerArn=alb_arn, Protocol="HTTP", Port=port,
+                            DefaultActions=[{"Type": "forward", "TargetGroupArn": tg_arn}])
+        return {"status": "fixed", "listener": "created", "port": port}
+    fwd: list[str] = []
+    for a in existing.get("DefaultActions", []):
+        if a.get("Type") == "forward":
+            if a.get("TargetGroupArn"):
+                fwd.append(a["TargetGroupArn"])
+            fwd += [t["TargetGroupArn"] for t in a.get("ForwardConfig", {}).get("TargetGroups", [])]
+    if tg_arn in fwd:
+        return {"status": "ok", "listener": "already-forwarding", "port": port}
+    return {"status": "warn", "listener": "conflict", "port": port, "forwards_to": fwd,
+            "detail": f"ALB :{port} 已有 listener 转发到其它 TG,未覆盖,请手动确认或改用专用 ALB"}

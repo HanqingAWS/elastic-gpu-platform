@@ -147,19 +147,48 @@ def register_alb(accelerator_arn: str, region: str, alb_arn: str,
             "endpoint_group_created": created}
 
 
+def find_global_accelerator_sg(region: str, vpc_id: str) -> str | None:
+    """一次性查该 VPC 内 GA 自动创建的名为 GlobalAccelerator 的 SG(不轮询;校验用)。"""
+    r = client("ec2", region).describe_security_groups(Filters=[
+        {"Name": "group-name", "Values": ["GlobalAccelerator"]},
+        {"Name": "vpc-id", "Values": [vpc_id]}])
+    return r["SecurityGroups"][0]["GroupId"] if r["SecurityGroups"] else None
+
+
 def wait_global_accelerator_sg(region: str, vpc_id: str, timeout_s: int = 180) -> str | None:
     """轮询该 VPC 内 GA 自动创建的名为 GlobalAccelerator 的 SG。"""
-    ec2 = client("ec2", region)
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        r = ec2.describe_security_groups(Filters=[
-            {"Name": "group-name", "Values": ["GlobalAccelerator"]},
-            {"Name": "vpc-id", "Values": [vpc_id]},
-        ])
-        if r["SecurityGroups"]:
-            return r["SecurityGroups"][0]["GroupId"]
+        sg = find_global_accelerator_sg(region, vpc_id)
+        if sg:
+            return sg
         time.sleep(10)
     return None
+
+
+def list_accelerators() -> list[dict]:
+    """列所有 accelerator(供向导下拉选 GA)。"""
+    ga = _ga()
+    out = []
+    for a in ga.list_accelerators().get("Accelerators", []):
+        ips: list[str] = []
+        for s in a.get("IpSets", []):
+            ips += s.get("IpAddresses", [])
+        out.append({"arn": a["AcceleratorArn"], "name": a.get("Name"), "dns": a.get("DnsName"),
+                    "enabled": a.get("Enabled"), "status": a.get("Status"), "static_ips": ips})
+    return out
+
+
+def create_accelerator(name: str, listener_port: int = 443, dry_run: bool = True) -> dict:
+    """运行时新建 GA(+TCP listener),非 CDK。返回新 accelerator ARN。"""
+    if dry_run:
+        return {"planned": f"create accelerator {name} + TCP {listener_port} listener"}
+    ga = _ga()
+    acc = ga.create_accelerator(Name=name, Enabled=True, IpAddressType="IPV4")["Accelerator"]
+    arn = acc["AcceleratorArn"]
+    lis = ga.create_listener(AcceleratorArn=arn, Protocol="TCP",
+                             PortRanges=[{"FromPort": listener_port, "ToPort": listener_port}])["Listener"]
+    return {"accelerator_arn": arn, "dns": acc.get("DnsName"), "listener_arn": lis["ListenerArn"]}
 
 
 def authorize_ga_ingress(region: str, node_sg_id: str, ga_sg_id: str, ports: list[int], dry_run: bool = True) -> dict:

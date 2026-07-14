@@ -13,9 +13,43 @@ def list_vpcs(region: str) -> list[dict]:
     return [{"vpc_id": v["VpcId"], "cidr": v["CidrBlock"], "is_default": v.get("IsDefault", False)} for v in r["Vpcs"]]
 
 
+def _subnet_egress(ec2, vpc_id: str, subnet_ids: list[str]) -> dict:
+    """按路由表判断每个子网的出网:public(0.0.0.0/0→igw)/ nat(→NAT)/ none(隔离)。
+    显式关联优先,否则用 VPC 主路由表。用于向导标注公私 + 私有子网出网校验。"""
+    rts = ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("RouteTables", [])
+    main_rt, explicit = None, {}
+    for rt in rts:
+        for a in rt.get("Associations", []):
+            if a.get("Main"):
+                main_rt = rt
+            if a.get("SubnetId"):
+                explicit[a["SubnetId"]] = rt
+
+    def classify(rt) -> tuple[str, bool]:
+        if not rt:
+            return ("none", False)
+        for r in rt.get("Routes", []):
+            if r.get("DestinationCidrBlock") == "0.0.0.0/0":
+                if str(r.get("GatewayId", "")).startswith("igw-"):
+                    return ("igw", True)
+                if r.get("NatGatewayId"):
+                    return ("nat", False)
+        return ("none", False)
+
+    out = {}
+    for sid in subnet_ids:
+        egress, public = classify(explicit.get(sid) or main_rt)
+        out[sid] = {"egress": egress, "public": public}
+    return out
+
+
 def list_subnets(region: str, vpc_id: str) -> list[dict]:
-    r = client("ec2", region).describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])
-    return [{"subnet_id": s["SubnetId"], "az": s["AvailabilityZone"], "cidr": s["CidrBlock"]} for s in r["Subnets"]]
+    ec2 = client("ec2", region)
+    subs = ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("Subnets", [])
+    eg = _subnet_egress(ec2, vpc_id, [s["SubnetId"] for s in subs])
+    return [{"subnet_id": s["SubnetId"], "az": s["AvailabilityZone"], "cidr": s["CidrBlock"],
+             "public": eg[s["SubnetId"]]["public"], "egress": eg[s["SubnetId"]]["egress"],
+             "map_public_ip": s.get("MapPublicIpOnLaunch", False)} for s in subs]
 
 
 def _sg_open_to_world(g: dict) -> bool:
@@ -214,6 +248,38 @@ def authorize_self_ingress(region: str, sg_id: str, port: int, dry_run: bool = T
         if "InvalidPermission.Duplicate" not in str(e):
             raise
         return {"self_authorized": port, "already_present": True}
+
+
+def sg_allows_from(region: str, target_sg: str, source_sg: str, port: int) -> bool:
+    """target_sg 是否已放行来自 source_sg 的 tcp/port(查 UserIdGroupPairs,用于校验去重)。"""
+    try:
+        g = client("ec2", region).describe_security_groups(GroupIds=[target_sg])["SecurityGroups"][0]
+    except Exception:  # noqa: BLE001
+        return False
+    for perm in g.get("IpPermissions", []):
+        if perm.get("IpProtocol") == "tcp" and perm.get("FromPort") == port and perm.get("ToPort") == port:
+            if any(p.get("GroupId") == source_sg for p in perm.get("UserIdGroupPairs", [])):
+                return True
+    return False
+
+
+def authorize_ingress_from_sg(region: str, target_sg: str, source_sg: str, port: int,
+                              description: str = "nlp-platform", dry_run: bool = True) -> dict:
+    """在 target_sg 放行来自 source_sg 的 tcp/port(SG 引用,非 CIDR)。**先查后加、不重复**。
+    用于:BYO 时 GA SG→ALB SG、ALB SG→节点 SG。"""
+    if dry_run:
+        return {"planned": f"authorize {target_sg} from {source_sg} tcp/{port}"}
+    if sg_allows_from(region, target_sg, source_sg, port):
+        return {"status": "ok", "already_present": True, "port": port, "target": target_sg, "source": source_sg}
+    try:
+        client("ec2", region).authorize_security_group_ingress(GroupId=target_sg, IpPermissions=[{
+            "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+            "UserIdGroupPairs": [{"GroupId": source_sg, "Description": description}]}])
+        return {"status": "fixed", "added": True, "port": port, "target": target_sg, "source": source_sg}
+    except Exception as e:  # noqa: BLE001
+        if "InvalidPermission.Duplicate" in str(e):
+            return {"status": "ok", "already_present": True, "port": port}
+        raise
 
 
 def create_key_pair(region: str, name: str, dry_run: bool = True) -> dict:

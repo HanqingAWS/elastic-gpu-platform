@@ -211,15 +211,16 @@ def tick():
             except Exception as e:  # noqa: BLE001
                 print(f"[loop] region {obs['region']} act err: {e}", flush=True)
 
-    # GA 权重:按各区健康台数占比设 TrafficDial(us-east-1 优先)
-    if ENABLED and CFG.ga_accelerator_arn and all_obs:
+    # GA 权重:按各区健康台数占比设 TrafficDial。GA ARN 优先读 Config(所选 GA,可含独立 GA),回落 env。
+    ga_arn = cfg.get("ga_accelerator_arn") or CFG.ga_accelerator_arn
+    if ENABLED and ga_arn and all_obs:
         from .weights import compute_dials
         from .actions import _set_ga_weights
         from .tools.guardrails import GuardrailError
         for region, dial in compute_dials(all_obs).items():
             if _last_dials.get(region) == dial:
                 continue  # 权重未变化:不重复调用、不刷审计(避免 Agent 日志被 set_ga_weights 刷屏)
-            eg = aws.find_endpoint_group_arn(CFG.ga_accelerator_arn, region)
+            eg = aws.find_endpoint_group_arn(ga_arn, region)
             if not eg:
                 continue
             try:

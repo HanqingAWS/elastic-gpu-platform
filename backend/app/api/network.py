@@ -12,7 +12,11 @@ class NetworkSelection(BaseModel):
     subnet_ids: list[str] = []
     sg_id: str | None = None        # 选现有安全组;空=自动创建
     key_name: str | None = None     # 选现有密钥对;空=自动创建
-    create_new: bool = False        # True = provision 时新建 VPC
+    create_new: bool = False        # True = provision 时新建 VPC(auto)
+    mode: str = "auto"              # auto | byo
+    alb_arn: str | None = None      # byo:现有公网 ALB
+    ga_accelerator_arn: str | None = None  # 选定的 GA
+    asg_subnet_ids: list[str] = []  # byo:ASG 用的私有子网
     note: str | None = None
 
 
