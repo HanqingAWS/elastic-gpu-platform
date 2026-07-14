@@ -105,7 +105,7 @@ export default function EnvWizard() {
         {/* GA 根节点 */}
         <div className={`tnode tn-ga ${anyGreen ? 'tn-green' : ''}`}>
           <div className="tn-t">Global Accelerator</div>
-          <div className="tn-s mono">{g?.ga?.accelerator?.dns_name || 'nlp-platform-dev'}</div>
+          <div className="tn-s mono">{g?.ga?.accelerator?.dns_name || '—'}</div>
           {g?.ga?.accelerator?.static_ips?.length
             ? <div className="tn-s mono faint">{g.ga.accelerator.static_ips.join('  ·  ')}</div> : null}
         </div>
@@ -311,6 +311,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   };
 
   const provision = async () => {
+    if (!gaArn) { setToast({ ok: false, msg: '请先选择或新建 GA(平台需把该区 ALB 注册进 GA)' }); return; }
     setBusy('provision'); setSteps([]);
     if (!(await saveAll())) { setBusy(null); return; }
     setToast({ ok: true, msg: '已提交,后台创建中(约 1–3 分钟,可留在本页看进度)…' });
@@ -417,7 +418,7 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
             {/* 1b · BYO:现有公网 ALB + GA */}
             {mode === 'byo' && !createNew && vpcId && (
               <>
-                <div className="section-t" style={{ marginTop: 18 }}>1b · 现有公网 ALB + GA(BYO)</div>
+                <div className="section-t" style={{ marginTop: 18 }}>1b · 现有公网 ALB(BYO)</div>
                 <div className="field"><label>公网 ALB(选 VPC 后自动列出该 VPC 内的 ALB)</label>
                   <select value={albArn} onChange={(e) => setAlbArn(e.target.value)}>
                     <option value="">— 选择 ALB —</option>
@@ -425,16 +426,20 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
                   </select></div>
                 {albArn && albs.find((a) => a.alb_arn === albArn && a.scheme !== 'internet-facing') && (
                   <div className="hint" style={{ color: 'var(--amber)' }}>该 ALB 非 internet-facing,请改用公网 ALB。</div>)}
-                <div className="field"><label>Global Accelerator</label>
-                  <div className="inline">
-                    <select value={gaArn} onChange={(e) => setGaArn(e.target.value)} style={{ flex: 1 }}>
-                      <option value="">平台默认 GA</option>
-                      {accels.map((g) => <option key={g.arn} value={g.arn}>{g.name} · {g.dns}</option>)}
-                    </select>
-                    <button className="btn btn-sm btn-ghost" onClick={newGa} disabled={!!busy} style={{ width: 'auto' }}>{busy === 'newga' ? '新建中…' : '+ 新建 GA'}</button>
-                  </div></div>
               </>
             )}
+
+            {/* GA(auto + byo 都需要:平台把该区 ALB 注册进所选 GA。CDK 不再建平台 GA,故必须显式选/新建) */}
+            <div className="field" style={{ marginTop: 14 }}><label>Global Accelerator(必选:平台把该区 ALB 注册进此 GA)</label>
+              <div className="inline">
+                <select value={gaArn} onChange={(e) => setGaArn(e.target.value)} style={{ flex: 1 }}>
+                  <option value="">— 请选择 GA(或新建) —</option>
+                  {accels.map((g) => <option key={g.arn} value={g.arn}>{g.name} · {g.dns}</option>)}
+                </select>
+                <button className="btn btn-sm btn-ghost" onClick={newGa} disabled={!!busy} style={{ width: 'auto' }}>{busy === 'newga' ? '新建中…' : '+ 新建 GA'}</button>
+              </div>
+              {!gaArn && <div className="hint" style={{ color: 'var(--amber)' }}>创建资源前需选择或新建一个 GA。</div>}
+            </div>
 
             {/* SG + key */}
             <div className="section-t" style={{ marginTop: 18 }}>2 · 安全组 / 密钥</div>

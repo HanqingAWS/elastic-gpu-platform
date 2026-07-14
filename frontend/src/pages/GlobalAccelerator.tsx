@@ -1,16 +1,11 @@
+import { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import { useLive, Loading, Empty, Banner, REGION_LABEL, healthClass, Copy } from './common';
 
-export default function GlobalAccelerator() {
-  const { data, loading } = useLive(() => api.ga(), 20000);
-  if (loading && !data) return <Loading />;
-
-  if (!data?.configured || !data?.accelerator) {
-    return <Empty>未发现 Global Accelerator{data?.error ? ` —— ${data.error}` : '（尚未部署或无权限）'}</Empty>;
-  }
+// GA 拓扑主体(选定某个 GA 后展示):加速器 DNS/静态 IP + 每监听器每区 endpoint group。
+function Topo({ data }: { data: any }) {
   const a = data.accelerator;
   const listeners: any[] = data.listeners ?? [];
-
   return (
     <>
       <Banner>统一入口:DNS 指向下方 <b>静态 IP / DNS</b>,anycast 就近接入。平台运行时仅调整各区 endpoint 权重与 TrafficDial,IP 恒定不变。</Banner>
@@ -63,6 +58,53 @@ export default function GlobalAccelerator() {
           </table>
         </div>
       ))}
+    </>
+  );
+}
+
+export default function GlobalAccelerator() {
+  // GA 不再由 CDK 建 → 页面不自动选任何 GA。默认预选 Config 里 provision 时所选的平台 GA;否则留空由用户下拉自选。
+  const [selectedArn, setSelectedArn] = useState<string>('');
+  const [accels, setAccels] = useState<any[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      api.getConfig().catch(() => ({} as any)),
+      api.accelerators().catch(() => ({ accelerators: [] })),
+    ]).then(([cfg, ac]: any[]) => {
+      if (!alive) return;
+      setAccels(ac.accelerators || []);
+      if (cfg?.ga_accelerator_arn) setSelectedArn(cfg.ga_accelerator_arn);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const { data, loading } = useLive(
+    () => (selectedArn ? api.ga(selectedArn) : Promise.resolve({ configured: false } as any)),
+    20000,
+    selectedArn,
+  );
+
+  return (
+    <>
+      <div className="field" style={{ maxWidth: 680, marginBottom: 14 }}>
+        <label>选择 Global Accelerator（默认为已配置的平台 GA;账号内全部 GA 供选）</label>
+        <select value={selectedArn} onChange={(e) => setSelectedArn(e.target.value)}>
+          <option value="">— 请选择 GA —</option>
+          {accels.map((g) => <option key={g.arn} value={g.arn}>{g.name} · {g.dns}</option>)}
+        </select>
+      </div>
+
+      {!selectedArn ? (
+        <Empty>请从上方选择要查看的 Global Accelerator（本平台不自动展示账号内其它工作负载的 GA）。</Empty>
+      ) : loading && !data ? (
+        <Loading />
+      ) : !data?.configured || !data?.accelerator ? (
+        <Empty>未发现该 Global Accelerator 的拓扑{data?.error ? ` —— ${data.error}` : ''}</Empty>
+      ) : (
+        <Topo data={data} />
+      )}
     </>
   );
 }

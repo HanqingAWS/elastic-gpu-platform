@@ -6,7 +6,7 @@ from .tools.aws_actions import AGENT_TOOLS
 
 _agent = None
 _agent_model = None  # 已装配 agent 所用的 model_id
-DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL = "global.anthropic.claude-opus-4-8"
 
 SYSTEM_PROMPT = """你是 NLP-Platform 的多区域 GPU Spot 调度决策助手。
 目标:在活动窗口内,用最少成本让全局健康台数达到目标(默认 2 台),p4de 优先、p4d 兜底,Spot 优先、

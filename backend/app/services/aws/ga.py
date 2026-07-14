@@ -13,16 +13,8 @@ def _ga():
 
 
 def resolve_accelerator_arn(configured: str | None) -> str | None:
-    if configured:
-        return configured
-    try:
-        accs = _ga().list_accelerators().get("Accelerators", [])
-        for a in accs:
-            if "nlp" in a.get("Name", "").lower():
-                return a["AcceleratorArn"]
-        return accs[0]["AcceleratorArn"] if accs else None
-    except Exception:  # noqa: BLE001
-        return None
+    # CDK 不再建平台 GA;只认显式配置/所选的 GA,绝不自动挑账号里别人的 accelerator(曾误显示 zhangyou)。
+    return configured or None
 
 
 def describe_topology(configured_arn: str | None) -> dict:

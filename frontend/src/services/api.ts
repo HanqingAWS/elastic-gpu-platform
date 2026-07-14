@@ -43,8 +43,8 @@ export const api = {
   getSchedules: () => req<any>('/schedules'),
   putSchedule: (body: any) => req<any>('/schedules', { method: 'PUT', body: JSON.stringify(body) }),
   deleteSchedule: (id: string) => req<any>(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  // global accelerator
-  ga: () => req<any>('/ga'),
+  // global accelerator（arn 可选:选哪个 GA 看拓扑;不传则后端按 Config→env 解析,无则空）
+  ga: (arn?: string) => req<any>(`/ga${arn ? `?arn=${encodeURIComponent(arn)}` : ''}`),
   // networking
   network: () => req<any>('/network'),
   putNetwork: (body: any) => req<any>('/network', { method: 'PUT', body: JSON.stringify(body) }),
