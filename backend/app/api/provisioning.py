@@ -120,6 +120,14 @@ def _run_provision(run_id: str, req: ProvisionReq) -> None:
             if req.ga_accelerator_arn:
                 patch["ga_accelerator_arn"] = req.ga_accelerator_arn
             get_dynamo().put_config(patch)
+            # 回写 network selection:任何路径 provision(含直接 API)后,重进向导都能回填(不只 UI saveAll 路径)
+            get_dynamo().put_network({
+                "region": req.region, "mode": req.mode,
+                "vpc_id": result.get("vpc_id") or req.vpc_id, "create_new": False,
+                "subnet_ids": req.subnet_ids or [], "asg_subnet_ids": req.asg_subnet_ids or [],
+                "alb_arn": req.alb_arn, "ga_accelerator_arn": req.ga_accelerator_arn,
+                "sg_id": req.sg_id, "key_name": req.key_name,
+            })
         except Exception:  # noqa: BLE001
             pass
     except Exception as e:  # noqa: BLE001
