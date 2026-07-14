@@ -46,9 +46,12 @@ export default function Overview({ onNavigate }: { onNavigate?: OnNavigate }) {
     (selections || []).some((s: any) => s.region === r && (s.create_new || s.vpc_id)),
   );
   const capDone = base > 0 || schedules.some((s: any) => s.enabled);
+  // GA 不再由 CDK 建 → 现在是手动前置:向导里选/新建 GA,provision 时把各区 ALB 注册进它,并存进 Config.ga_accelerator_arn。
+  const gaDone = !!cfg.ga_accelerator_arn;
   const steps = [
     { key: 'ami', label: '模型 / AMI', sub: '每区填入 AMI ARN 并启用', done: amiDone.length, total: regions.length, view: 'env' as const },
     { key: 'net', label: '网络 (VPC / 子网)', sub: '每区选择现有或新建 VPC', done: netDone.length, total: regions.length, view: 'env' as const },
+    { key: 'ga', label: 'Global Accelerator', sub: '在向导中选择或新建 GA(平台把各区 ALB 注册进它对外服务)', done: gaDone ? 1 : 0, total: 1, view: 'env' as const },
     { key: 'cap', label: '容量(基础或活动)', sub: '设置基础数量或启用定时活动', done: capDone ? 1 : 0, total: 1, view: 'schedules' as const },
   ];
   const doneCount = steps.filter((s) => s.done >= s.total).length;
