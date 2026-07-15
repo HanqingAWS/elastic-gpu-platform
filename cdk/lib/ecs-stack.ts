@@ -19,7 +19,7 @@ interface Props extends cdk.StackProps {
   tables: Record<string, dynamodb.Table>;
   userPool: cognito.IUserPool;
   userPoolClient: cognito.IUserPoolClient;
-  acceleratorArn: string;
+  acceleratorArn?: string;   // GA 不再由 CDK 创建;空=手动/运行时建 GA 后界面选择、存 Config
 }
 
 export class EcsStack extends cdk.Stack {
@@ -28,6 +28,10 @@ export class EcsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: Props) {
     super(scope, id, props);
     const c = props.config;
+    // CPU 架构:从 context 读(deploy.sh 按构建机 uname -m 传);默认 X86_64。
+    // ARM64 用于 t4g/Graviton 构建机 —— 原生构建 arm64 镜像 + 更省的 Fargate;须与推送镜像架构一致。
+    const cpuArch = this.node.tryGetContext('cpuArch') === 'ARM64'
+      ? ecs.CpuArchitecture.ARM64 : ecs.CpuArchitecture.X86_64;
     // 容器镜像:从 context 读 ECR URI(无需本地 Docker);默认指向本账号 ECR nlp-backend/nlp-agent:latest
     const account = cdk.Stack.of(this).account;
     const backendImage = this.node.tryGetContext('backendImageUri')
@@ -111,7 +115,7 @@ export class EcsStack extends cdk.Stack {
       COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
       COGNITO_REGION: c.region,
-      GA_ACCELERATOR_ARN: props.acceleratorArn,
+      GA_ACCELERATOR_ARN: props.acceleratorArn || '',   // 空=无 CDK GA;运行时选的 GA 存 Config
       GPU_NODE_INSTANCE_PROFILE_ARN: gpuNodeProfile.attrArn,
       GPU_NODE_ROLE_ARN: gpuNodeRole.roleArn,
       CONTROL_PLANE_SG_ID: props.serviceSecurityGroup.securityGroupId,
@@ -120,7 +124,7 @@ export class EcsStack extends cdk.Stack {
 
     // ---- Web 服务(React+FastAPI)behind ALB ----
     const webLog = new logs.LogGroup(this, 'WebLog', { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: cdk.RemovalPolicy.DESTROY });
-    const webTask = new ecs.FargateTaskDefinition(this, 'WebTask', { cpu: c.webCpu, memoryLimitMiB: c.webMemory, taskRole, executionRole: execRole });
+    const webTask = new ecs.FargateTaskDefinition(this, 'WebTask', { cpu: c.webCpu, memoryLimitMiB: c.webMemory, taskRole, executionRole: execRole, runtimePlatform: { cpuArchitecture: cpuArch } });
     webTask.addContainer('web', {
       image: ecs.ContainerImage.fromRegistry(backendImage),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'web', logGroup: webLog }),
@@ -160,7 +164,7 @@ export class EcsStack extends cdk.Stack {
 
     // ---- Agent/Scheduler 服务(无对外端口,常驻控制循环) ----
     const agentLog = new logs.LogGroup(this, 'AgentLog', { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: cdk.RemovalPolicy.DESTROY });
-    const agentTask = new ecs.FargateTaskDefinition(this, 'AgentTask', { cpu: c.agentCpu, memoryLimitMiB: c.agentMemory, taskRole, executionRole: execRole });
+    const agentTask = new ecs.FargateTaskDefinition(this, 'AgentTask', { cpu: c.agentCpu, memoryLimitMiB: c.agentMemory, taskRole, executionRole: execRole, runtimePlatform: { cpuArchitecture: cpuArch } });
     agentTask.addContainer('agent', {
       image: ecs.ContainerImage.fromRegistry(agentImage),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'agent', logGroup: agentLog }),

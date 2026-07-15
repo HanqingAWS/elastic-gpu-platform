@@ -53,6 +53,10 @@ REGION="${CFG_REGION:-us-east-1}"
 ok "控制面区(来自 config.ts):$REGION"
 export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
 
+# 构建机架构 → Fargate 架构(本机原生构建镜像,与任务架构自动一致;t4g/Graviton=ARM64,x86 机=X86_64)
+case "$(uname -m)" in aarch64|arm64) CPU_ARCH=ARM64 ;; *) CPU_ARCH=X86_64 ;; esac
+ok "架构:$CPU_ARCH ($(uname -m)) —— 镜像本机原生构建,Fargate 任务用同架构(t4g 可用)"
+
 # ---- 1) AWS CLI ----
 log "检查 AWS CLI"
 if ! have aws; then
@@ -155,8 +159,8 @@ log "CDK bootstrap  aws://$ACCT/$REGION"
 
 # ---- 8) 部署 5 个栈 ----
 log "部署控制面 5 个栈(network/dynamodb/cognito/ecs/monitoring)—— 首次约 10-15 分钟"
-( cd "$REPO/cdk" && npx cdk deploy --all --require-approval never --context environment=dev ) \
-  || die "cdk deploy 失败(看上面 CloudFormation 报错;常见:IAM 权限不足 / 镜像未推 / 区域配额)。"
+( cd "$REPO/cdk" && npx cdk deploy --all --require-approval never --context environment=dev --context cpuArch=$CPU_ARCH ) \
+  || die "cdk deploy 失败(看上面 CloudFormation 报错;常见:IAM 权限不足 / 镜像未推 / 区域配额 / 镜像与 Fargate 架构不一致)。"
 ok "cdk deploy 完成"
 
 # ---- 9) 取输出 ----
