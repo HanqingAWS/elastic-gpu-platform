@@ -98,6 +98,21 @@ export class EcsStack extends cdk.Stack {
       resources: [gpuNodeRole.roleArn],
       conditions: { StringEquals: { 'iam:PassedToService': ['ec2.amazonaws.com', 'autoscaling.amazonaws.com'] } },
     }));
+    // 全新账号首次建 ASG/ALB/GA 时,AWS 需自动创建对应的 service-linked role;按服务名收紧授权。
+    taskRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['iam:CreateServiceLinkedRole'],
+      resources: ['*'],
+      conditions: {
+        StringEquals: {
+          'iam:AWSServiceName': [
+            'autoscaling.amazonaws.com',
+            'elasticloadbalancing.amazonaws.com',
+            'globalaccelerator.amazonaws.com',
+            'spot.amazonaws.com',
+          ],
+        },
+      },
+    }));
     taskRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
       resources: ['*'],
