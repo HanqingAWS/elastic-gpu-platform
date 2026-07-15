@@ -5,8 +5,8 @@ import { NetworkStack } from '../lib/network-stack';
 import { DynamoDBStack } from '../lib/dynamodb-stack';
 import { CognitoStack } from '../lib/cognito-stack';
 import { EcsStack } from '../lib/ecs-stack';
-import { GlobalAcceleratorStack } from '../lib/globalaccelerator-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
+// GA 不再由 CDK 创建(改为手动/运行时建 + 界面选择);globalaccelerator-stack 保留在库里但不实例化。
 
 const app = new cdk.App();
 const environment = app.node.tryGetContext('environment') || 'dev';
@@ -17,7 +17,6 @@ const prefix = `nlp-${config.environmentName}`;
 const network = new NetworkStack(app, `${prefix}-network`, { env, config });
 const data = new DynamoDBStack(app, `${prefix}-dynamodb`, { env, config });
 const cognito = new CognitoStack(app, `${prefix}-cognito`, { env, config });
-const ga = new GlobalAcceleratorStack(app, `${prefix}-ga`, { env, config });
 
 const ecs = new EcsStack(app, `${prefix}-ecs`, {
   env,
@@ -28,12 +27,11 @@ const ecs = new EcsStack(app, `${prefix}-ecs`, {
   tables: data.tables,
   userPool: cognito.userPool,
   userPoolClient: cognito.userPoolClient,
-  acceleratorArn: ga.acceleratorArn,
+  // GA 不由 CDK 创建 —— 手动/运行时建 GA,界面选择后存 Config;agent 读 Config 的 GA ARN
 });
 ecs.addDependency(network);
 ecs.addDependency(data);
 ecs.addDependency(cognito);
-ecs.addDependency(ga);
 
 new MonitoringStack(app, `${prefix}-monitoring`, {
   env,
@@ -42,7 +40,7 @@ new MonitoringStack(app, `${prefix}-monitoring`, {
   tables: data.tableNames,
 });
 
-for (const s of [network, data, cognito, ga, ecs]) {
+for (const s of [network, data, cognito, ecs]) {
   Object.entries(config.tags).forEach(([k, v]) => cdk.Tags.of(s).add(k, v));
 }
 app.synth();
