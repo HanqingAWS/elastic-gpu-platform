@@ -6,9 +6,17 @@ export interface EnvironmentConfig {
   region: string; // 控制平面部署区(默认 us-east-1)
   // 数据平面目标区(GPU Spot 队列),us-east-1 优先
   dataPlaneRegions: string[];
-  // 控制平面网络
+  // 控制平面网络:默认按 vpcCidr/maxAzs 自建 VPC。
   vpcCidr: string;
   maxAzs: number;
+  // BYO 控制面 VPC(可选):填了就用现有 VPC + 指定子网,不自建。
+  //   albSubnets    = 公有子网(≥2 个不同 AZ,给 internet-facing ALB)
+  //   serviceSubnets = 私有子网(需有出网:NAT 或 ECR/Logs/DDB/Cognito/Bedrock/EC2·ELB·GA 的 VPC endpoint),给 ECS 任务
+  controlPlaneVpc?: {
+    vpcId: string;
+    albSubnets: { subnetId: string; az: string }[];
+    serviceSubnets: { subnetId: string; az: string }[];
+  };
   // ECS 控制平面服务规格
   webCpu: number;
   webMemory: number;

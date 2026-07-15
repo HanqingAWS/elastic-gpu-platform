@@ -10,18 +10,35 @@ interface Props extends cdk.StackProps {
 
 /** 控制平面 VPC + SG。数据平面(GPU 队列)的 VPC 在运行时由 provisioner 动态创建,不在此。 */
 export class NetworkStack extends cdk.Stack {
-  public readonly vpc: ec2.Vpc;
+  public readonly vpc: ec2.IVpc;
+  public readonly albSubnets: ec2.ISubnet[];       // 公有,给 internet-facing ALB
+  public readonly serviceSubnets: ec2.ISubnet[];   // 私有(需出网),给 ECS 任务
   public readonly albSecurityGroup: ec2.SecurityGroup;
   public readonly serviceSecurityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: Props) {
     super(scope, id, props);
 
-    this.vpc = new ec2.Vpc(this, 'Vpc', {
-      ipAddresses: ec2.IpAddresses.cidr(props.config.vpcCidr),
-      maxAzs: props.config.maxAzs,
-      natGateways: 1,
-    });
+    const cp = props.config.controlPlaneVpc;
+    if (cp) {
+      // BYO:导入现有 VPC + 指定子网(2 公有给 ALB;私有给 ECS 任务,私有必须能出网)。CDK 不会删客户的 VPC。
+      const azs = Array.from(new Set([...cp.albSubnets, ...cp.serviceSubnets].map((s) => s.az)));
+      this.vpc = ec2.Vpc.fromVpcAttributes(this, 'Vpc', { vpcId: cp.vpcId, availabilityZones: azs });
+      this.albSubnets = cp.albSubnets.map((s, i) =>
+        ec2.Subnet.fromSubnetAttributes(this, `AlbSubnet${i}`, { subnetId: s.subnetId, availabilityZone: s.az }));
+      this.serviceSubnets = cp.serviceSubnets.map((s, i) =>
+        ec2.Subnet.fromSubnetAttributes(this, `SvcSubnet${i}`, { subnetId: s.subnetId, availabilityZone: s.az }));
+    } else {
+      // 默认:自建 VPC(公有 + 私有带 1 个 NAT)
+      const vpc = new ec2.Vpc(this, 'Vpc', {
+        ipAddresses: ec2.IpAddresses.cidr(props.config.vpcCidr),
+        maxAzs: props.config.maxAzs,
+        natGateways: 1,
+      });
+      this.vpc = vpc;
+      this.albSubnets = vpc.publicSubnets;
+      this.serviceSubnets = vpc.privateSubnets;
+    }
 
     // 控制平面 ALB(仅承载 Web UI/API)。注:入站按需收紧,不放开公网 0.0.0.0/0 到后端。
     this.albSecurityGroup = new ec2.SecurityGroup(this, 'AlbSg', {

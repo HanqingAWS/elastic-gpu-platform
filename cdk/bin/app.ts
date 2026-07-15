@@ -22,6 +22,8 @@ const ecs = new EcsStack(app, `${prefix}-ecs`, {
   env,
   config,
   vpc: network.vpc,
+  albSubnets: network.albSubnets,
+  serviceSubnets: network.serviceSubnets,
   albSecurityGroup: network.albSecurityGroup,
   serviceSecurityGroup: network.serviceSecurityGroup,
   tables: data.tables,

@@ -14,6 +14,8 @@ import { EnvironmentConfig } from '../config/config';
 interface Props extends cdk.StackProps {
   config: EnvironmentConfig;
   vpc: ec2.IVpc;
+  albSubnets: ec2.ISubnet[];       // 公有,ALB 用
+  serviceSubnets: ec2.ISubnet[];   // 私有(需出网),ECS 任务用
   albSecurityGroup: ec2.ISecurityGroup;
   serviceSecurityGroup: ec2.ISecurityGroup;
   tables: Record<string, dynamodb.Table>;
@@ -134,11 +136,13 @@ export class EcsStack extends cdk.Stack {
     const webService = new ecs.FargateService(this, 'WebService', {
       cluster, taskDefinition: webTask, desiredCount: 1,
       securityGroups: [props.serviceSecurityGroup as ec2.SecurityGroup],
+      vpcSubnets: { subnets: props.serviceSubnets },
       assignPublicIp: false,
     });
 
     const alb = new elbv2.ApplicationLoadBalancer(this, 'Alb', {
       vpc: props.vpc, internetFacing: true, securityGroup: props.albSecurityGroup as ec2.SecurityGroup,
+      vpcSubnets: { subnets: props.albSubnets },
       loadBalancerName: 'nlp-dev-cp-alb',  // 固定名(此前控制面 ALB 被带外删除;显式命名以触发 CFN 重建并稳定 DNS)
     });
     const listener = alb.addListener('Http', { port: 80, protocol: elbv2.ApplicationProtocol.HTTP, open: false });
@@ -173,7 +177,8 @@ export class EcsStack extends cdk.Stack {
     });
     new ecs.FargateService(this, 'AgentService', {
       cluster, taskDefinition: agentTask, desiredCount: 1,
-      securityGroups: [props.serviceSecurityGroup as ec2.SecurityGroup], assignPublicIp: false,
+      securityGroups: [props.serviceSecurityGroup as ec2.SecurityGroup],
+      vpcSubnets: { subnets: props.serviceSubnets }, assignPublicIp: false,
     });
 
     new cdk.CfnOutput(this, 'AlbDnsName', { value: alb.loadBalancerDnsName });
