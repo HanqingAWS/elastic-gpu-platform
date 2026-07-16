@@ -2,7 +2,8 @@
 # =============================================================================
 # NLP-Platform 控制面一键部署脚本(客户 EC2 / 全新账号)
 #
-#   用法:  bash deploy.sh [admin-email]
+#   用法:  bash deploy.sh [-e dev|prod] [admin-email]
+#     -e | --env   环境(默认 dev)。决定 --context environment 与栈名前缀 nlp-<env>-*。
 #     admin-email  可选。给了就自动建首个登录用户 + 打印随机密码。
 #
 #   特性:幂等、可重复运行。自动检查/安装 Node.js、Docker、AWS CLI、CDK;
@@ -15,7 +16,17 @@
 # =============================================================================
 set -u
 
-ADMIN_EMAIL="${1:-}"
+# 参数:-e/--env <dev|prod>(默认 dev);位置参数 = admin-email(可选)
+ENV=dev
+ADMIN_EMAIL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -e|--env) ENV="${2:-dev}"; shift 2 ;;
+    --env=*)  ENV="${1#*=}"; shift ;;
+    -*)       shift ;;                       # 忽略未知 flag
+    *)        ADMIN_EMAIL="$1"; shift ;;
+  esac
+done
 NODE_MAJOR=20
 
 # ---- 输出helpers ----
@@ -32,6 +43,7 @@ elif [ -f "$SCRIPT_DIR/../Dockerfile.web" ] && [ -d "$SCRIPT_DIR/../cdk" ]; then
 else die "找不到仓库根(需含 Dockerfile.web 与 cdk/)。请把本脚本放在仓库根目录运行。"; fi
 cd "$REPO" || die "无法进入 $REPO"
 ok "仓库根:$REPO"
+ok "环境:$ENV(栈前缀 nlp-$ENV-*,--context environment=$ENV)"
 
 # ---- 环境探测 ----
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
@@ -158,8 +170,8 @@ log "CDK bootstrap  aws://$ACCT/$REGION"
   && ok "bootstrap 完成" || warn "bootstrap 返回非 0(通常是已 bootstrap,继续部署)"
 
 # ---- 8) 部署 5 个栈 ----
-log "部署控制面 5 个栈(network/dynamodb/cognito/ecs/monitoring)—— 首次约 10-15 分钟"
-( cd "$REPO/cdk" && npx cdk deploy --all --require-approval never --context environment=dev --context cpuArch=$CPU_ARCH ) \
+log "部署控制面 5 个栈(nlp-$ENV-*: network/dynamodb/cognito/ecs/monitoring)—— 首次约 10-15 分钟"
+( cd "$REPO/cdk" && npx cdk deploy --all --require-approval never --context environment="$ENV" --context cpuArch=$CPU_ARCH ) \
   || die "cdk deploy 失败(看上面 CloudFormation 报错;常见:IAM 权限不足 / 镜像未推 / 区域配额 / 镜像与 Fargate 架构不一致)。"
 ok "cdk deploy 完成"
 
@@ -167,10 +179,10 @@ ok "cdk deploy 完成"
 log "读取部署输出"
 get_out() { aws cloudformation describe-stacks --stack-name "$1" --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text 2>/dev/null; }
-CF="$(get_out nlp-dev-ecs CloudFrontDomain)"
-POOL="$(get_out nlp-dev-cognito UserPoolId)"
-CLIENT="$(get_out nlp-dev-cognito UserPoolClientId)"
-[ -n "$CF" ]   && ok "控制台入口:https://$CF"      || warn "未取到 CloudFront 域名(可稍后 describe-stacks nlp-dev-ecs)"
+CF="$(get_out nlp-$ENV-ecs CloudFrontDomain)"
+POOL="$(get_out nlp-$ENV-cognito UserPoolId)"
+CLIENT="$(get_out nlp-$ENV-cognito UserPoolClientId)"
+[ -n "$CF" ]   && ok "控制台入口:https://$CF"      || warn "未取到 CloudFront 域名(可稍后 describe-stacks nlp-$ENV-ecs)"
 [ -n "$POOL" ] && ok "Cognito 池:$POOL / client:$CLIENT" || warn "未取到 Cognito 输出"
 
 # ---- 10) 建首个登录用户(可选)----

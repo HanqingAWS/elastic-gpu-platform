@@ -2,7 +2,8 @@
 # =============================================================================
 # NLP-Platform 控制面拆除脚本(与 deploy.sh 对应)
 #
-#   用法:  bash destroy.sh [-y] [--keep-ecr]
+#   用法:  bash destroy.sh [-e dev|prod] [-y] [--keep-ecr]
+#     -e | --env    环境(默认 dev)。决定 --context environment 与栈名前缀 nlp-<env>-*。
 #     -y | --yes    跳过确认(非交互/nohup 场景用)
 #     --keep-ecr    保留 ECR 仓库 + 镜像(默认会一并删除)
 #
@@ -14,8 +15,16 @@
 # =============================================================================
 set -u
 
-YES=0; KEEP_ECR=0
-for a in "$@"; do case "$a" in -y|--yes) YES=1 ;; --keep-ecr) KEEP_ECR=1 ;; esac; done
+YES=0; KEEP_ECR=0; ENV=dev
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -y|--yes)   YES=1; shift ;;
+    --keep-ecr) KEEP_ECR=1; shift ;;
+    -e|--env)   ENV="${2:-dev}"; shift 2 ;;
+    --env=*)    ENV="${1#*=}"; shift ;;
+    *)          shift ;;
+  esac
+done
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32m✓\033[0m %s\n' "$*"; }
@@ -55,7 +64,7 @@ ACCT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"
 # ---- 确认 ----
 log "将拆除以下内容"
 printf '   账号 / 区:  %s / %s\n' "$ACCT" "$REGION"
-printf '   CDK 5 栈:   nlp-dev-{network,dynamodb,cognito,ecs,monitoring}\n'
+printf '   CDK 5 栈:   nlp-%s-{network,dynamodb,cognito,ecs,monitoring}\n' "$ENV"
 if [ "$KEEP_ECR" = 0 ]; then printf '   ECR 仓库:   nlp-backend, nlp-agent(含镜像)\n'; else printf '   ECR:        保留(--keep-ecr)\n'; fi
 warn "数据面(GPU ASG / BYO ALB / GA / 数据面 VPC)不在 CDK 里,本脚本【不拆】——"
 warn "请先在控制台「移除区域」或手动清理这些,否则会继续计费。"
@@ -67,7 +76,7 @@ fi
 
 # ---- CDK destroy ----
 log "CDK destroy 5 个栈(约 10-20 分钟;CloudFront 删除较慢)"
-( cd "$REPO/cdk" && npx cdk destroy --all --force --context environment=dev --context cpuArch="$CPU_ARCH" ) \
+( cd "$REPO/cdk" && npx cdk destroy --all --force --context environment="$ENV" --context cpuArch="$CPU_ARCH" ) \
   || die "cdk destroy 失败(看上面报错。若卡在依赖:可能有未清的数据面资源 / GA 托管 ENI 还没释放,先清那些再重试)。"
 ok "CDK 栈已拆除"
 
