@@ -13,6 +13,7 @@ ExecStart=/usr/bin/docker run --rm --name nlp-vllm --gpus all --network host \
   -v /opt/models:/models ${VLLM_IMAGE} \
   --model /models/${MODEL_PREFIX} --port ${SERVING_PORT} \
   --data-parallel-size ${DP} --tensor-parallel-size ${TP} \
+  --max-model-len ${MAX_MODEL_LEN} --gpu-memory-utilization ${GPU_MEM_UTIL} \
   --safetensors-load-strategy prefetch
 ExecStop=/usr/bin/docker stop nlp-vllm
 Restart=always
