@@ -234,13 +234,18 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
         setSgId(sel.sg_id || ''); setKeyName(sel.key_name || '');
         if (sel.mode) setMode(sel.mode);
         setAlbArn(sel.alb_arn || ''); setGaArn(sel.ga_accelerator_arn || '');
-        setSelSubnets((sel.mode === 'byo' ? sel.asg_subnet_ids : sel.subnet_ids) || sel.subnet_ids || []);
+        const stored = (((sel.mode === 'byo' ? sel.asg_subnet_ids : sel.subnet_ids) || sel.subnet_ids || []) as string[]);
         if (sel.vpc_id && !sel.create_new) {
           try {
             const [gr, s, al] = await Promise.all([
               api.securityGroups(region, sel.vpc_id), api.subnets(region, sel.vpc_id), api.albs(region, sel.vpc_id)]);
             setSgs(gr.security_groups || []); setSubnets(s.subnets || []); setAlbs(al.albs || []);
-          } catch { /* */ }
+            // 只保留仍存在的子网:记录里已删除的子网界面看不到、也取消不掉,若带进 provision 会报 InvalidSubnet
+            const availIds = new Set((s.subnets || []).map((x: any) => x.subnet_id));
+            setSelSubnets(stored.filter((id) => availIds.has(id)));
+          } catch { setSelSubnets(stored); }
+        } else {
+          setSelSubnets(stored);
         }
       }
       const rc = (cfg.regions || {})[region] || {};
@@ -265,13 +270,21 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   const toggleSubnet = (id: string) =>
     setSelSubnets((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
+  // 只用仍存在的子网(以当前有效选择为准,过滤掉记录里已删除的;子网列表未加载时不过滤,避免误清)
+  const validSubnets = (): string[] => {
+    if (!subnets.length) return selSubnets;
+    const availIds = new Set(subnets.map((x: any) => x.subnet_id));
+    return selSubnets.filter((id) => availIds.has(id));
+  };
+
   const saveAll = async (): Promise<boolean> => {
     setToast(null);
+    const sel = validSubnets();
     try {
       await api.putNetwork({
         region, mode, vpc_id: createNew ? null : vpcId, create_new: createNew && mode === 'auto',
-        subnet_ids: mode === 'byo' ? [] : (createNew ? [] : selSubnets),
-        asg_subnet_ids: mode === 'byo' ? selSubnets : [],
+        subnet_ids: mode === 'byo' ? [] : (createNew ? [] : sel),
+        asg_subnet_ids: mode === 'byo' ? sel : [],
         alb_arn: mode === 'byo' ? (albArn || null) : null,
         ga_accelerator_arn: gaArn || null,
         sg_id: createNew && mode === 'auto' ? null : (sgId || null), key_name: keyName || null,
@@ -319,10 +332,11 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
       const common = { region, ami_id: amiArn, sg_id: sgId || null, key_name: keyName || null,
         ga_accelerator_arn: gaArn || null, serving_port: Number(servingPort), health_path: healthPath,
         metrics_port: Number(servingPort), dry_run: false };
+      const sel = validSubnets();
       const body = mode === 'byo'
-        ? { ...common, mode: 'byo', vpc_id: vpcId || null, alb_arn: albArn || null, asg_subnet_ids: selSubnets }
+        ? { ...common, mode: 'byo', vpc_id: vpcId || null, alb_arn: albArn || null, asg_subnet_ids: sel }
         : { ...common, mode: 'auto', vpc_id: createNew ? null : (vpcId || null),
-            subnet_ids: createNew ? null : (selSubnets.length ? selSubnets : null),
+            subnet_ids: createNew ? null : (sel.length ? sel : null),
             sg_id: createNew ? null : (sgId || null) };
       const { run_id } = await api.provision(body);
       let st: any = null;
