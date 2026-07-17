@@ -58,9 +58,10 @@ export class EcsStack extends cdk.Stack {
       ],
     });
     // 节点运行时需要:从 S3 拉模型 + 向控制面 DynamoDB 推指标(此前仅线上手动加,现纳入 CDK)
+    // 客户模型桶名可自定义(bake 时是变量),不限定桶名前缀以免拉不到模型 → S3 读放开到 *。
     gpuNodeRole.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObject', 's3:ListBucket'],
-      resources: ['arn:aws:s3:::nlp-models-*', 'arn:aws:s3:::nlp-models-*/*'],
+      resources: ['*'],
     }));
     gpuNodeRole.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:PutItem'],
