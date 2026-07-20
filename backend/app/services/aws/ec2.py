@@ -325,3 +325,27 @@ def create_launch_template(region: str, name: str, ami_id: str, instance_type: s
         ec2.create_launch_template_version(LaunchTemplateId=lt_id, LaunchTemplateData=lt_data,
                                            SourceVersion=str(lt["LatestVersionNumber"]))
         return {"lt_id": lt_id, "note": "appended new version (reused LT)"}
+
+
+def update_launch_template_ami(region: str, name: str, ami_id: str) -> dict:
+    """轻量更新:只把已存在 LT 的 AMI 换掉——基于 $Latest 追加新版本,仅覆盖 ImageId
+    (机型 / SG / 密钥 / instance profile / 磁盘全继承旧版本)。ASG 用 $Latest → 新实例自动用新 AMI。
+    不碰子网 / 安全组 / ALB / GA。LT 不存在(该区未 provision)→ 抛 RuntimeError('NO_LT:<name>')。"""
+    ec2 = client("ec2", region)
+    try:
+        lt = ec2.describe_launch_templates(LaunchTemplateNames=[name])["LaunchTemplates"][0]
+    except Exception as e:  # noqa: BLE001
+        if "NotFound" in str(e):
+            raise RuntimeError(f"NO_LT:{name}")
+        raise
+    lt_id = lt["LaunchTemplateId"]
+    v = ec2.create_launch_template_version(
+        LaunchTemplateId=lt_id, SourceVersion=str(lt["LatestVersionNumber"]),
+        VersionDescription=f"ami={ami_id}", LaunchTemplateData={"ImageId": ami_id},
+    )["LaunchTemplateVersion"]
+    # 设为默认版本(冗余保险:ASG 已 $Latest;设默认让手动/其他方式起的实例也用新 AMI)
+    try:
+        ec2.modify_launch_template(LaunchTemplateId=lt_id, DefaultVersion=str(v["VersionNumber"]))
+    except Exception:  # noqa: BLE001
+        pass
+    return {"lt_id": lt_id, "new_version": v["VersionNumber"], "ami_id": ami_id}

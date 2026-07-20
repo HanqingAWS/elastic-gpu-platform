@@ -55,6 +55,8 @@ export const api = {
     req<any>(`/provisioning/security-groups?region=${encodeURIComponent(region)}&vpc_id=${encodeURIComponent(vpcId)}`),
   keyPairs: (region: string) => req<any>(`/provisioning/key-pairs?region=${encodeURIComponent(region)}`),
   provision: (body: any) => req<any>('/provisioning/provision', { method: 'POST', body: JSON.stringify(body) }),
+  updateAmi: (region: string, amiId: string, refresh = false) =>
+    req<any>('/provisioning/update-ami', { method: 'POST', body: JSON.stringify({ region, ami_id: amiId, refresh }) }),
   provisionStatus: (runId: string) => req<any>(`/provisioning/provision-status?run_id=${encodeURIComponent(runId)}`),
   regionStatus: (region: string, vpcId?: string) =>
     req<any>(`/provisioning/status?region=${encodeURIComponent(region)}${vpcId ? `&vpc_id=${encodeURIComponent(vpcId)}` : ''}`),

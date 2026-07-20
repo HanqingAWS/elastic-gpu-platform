@@ -107,6 +107,21 @@ def get_asgs(region: str, names: list[str]) -> dict:
     return out
 
 
+def start_instance_refresh(region: str, asg_name: str, dry_run: bool = False) -> dict:
+    """对 ASG 发起 instance refresh:在跑实例滚动替换为最新 LT($Latest)→ 用上新 AMI。
+    desired=0 时无实例可换(近 no-op)。MinHealthyPercentage=0:GPU 稀缺,不强留旧实例。
+    best-effort:失败只回错误、不抛(调用方按需展示)。"""
+    if dry_run:
+        return {"planned": f"instance refresh {asg_name}"}
+    try:
+        r = client("autoscaling", region).start_instance_refresh(
+            AutoScalingGroupName=asg_name,
+            Preferences={"MinHealthyPercentage": 0, "InstanceWarmup": 300})
+        return {"asg_name": asg_name, "refresh_id": r.get("InstanceRefreshId")}
+    except Exception as e:  # noqa: BLE001
+        return {"asg_name": asg_name, "error": str(e)}
+
+
 def set_desired(region: str, asg_name: str, desired: int, dry_run: bool = True) -> dict:
     desired = max(0, min(8, int(desired)))
     if dry_run:

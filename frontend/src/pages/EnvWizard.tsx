@@ -359,6 +359,22 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
     finally { setBusy(null); }
   };
 
+  // 只更新 AMI:仅给该区 LT 追加新版本(换 ImageId)+ 写库,不碰子网/安全组/ALB/GA。已建成的区才有意义。
+  const updateAmiOnly = async () => {
+    if (!amiArn) { setToast({ ok: false, msg: '请先填 AMI' }); return; }
+    const refresh = window.confirm(
+      `只更新 ${region} 的 AMI 为:\n${amiArn}\n\n仅追加启动模板新版本 + 写库,不动子网 / 安全组 / ALB / GA。\n\n【确定】= 同时滚动替换在跑的 GPU 实例,立即用上新 AMI(会短暂中断服务)\n【取消】= 只更模板,新拉起的实例才用新 AMI,在跑实例保持不变(推荐)`,
+    );
+    setBusy('ami'); setToast(null);
+    try {
+      const r = await api.updateAmi(region, amiArn, refresh);
+      setToast({ ok: true, msg: `AMI 已更新 → 启动模板 v${r.launch_template?.new_version}` +
+        (refresh ? '(已发起在跑实例滚动替换)✓' : '(新实例生效;在跑实例不变)✓') });
+      onChanged();
+    } catch (e: any) { setToast({ ok: false, msg: e.message }); }
+    finally { setBusy(null); }
+  };
+
   const sgOpen = !!sgs.find((gr) => gr.sg_id === sgId)?.open_to_world;
   const blockOpen = sgOpen && !ackOpenSg;
   const created = rstat?.state === 'created';
@@ -542,6 +558,12 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
         <div className="drawer-foot">
           <button className="btn btn-sm btn-ghost" onClick={removeRegion} disabled={!!busy} title="移除并拆除该区 GA/ALB/ASG(保留 VPC 可复用)" style={{ color: 'var(--rose, #f43f5e)', marginRight: 'auto' }}>{busy === 'remove' ? '移除中…' : '移除区域'}</button>
           <button className="btn btn-sm btn-ghost" onClick={save} disabled={!!busy || blockOpen}>{busy === 'save' ? '暂存中…' : '暂存'}</button>
+          {created && (
+            <button className="btn btn-sm btn-ghost" onClick={updateAmiOnly} disabled={!!busy || !amiArn}
+              title="只把该区 AMI 换成上面填的 ARN(启动模板追加新版本 + 写库),不碰网络 / 安全组 / ALB / GA">
+              {busy === 'ami' ? '更新中…' : '只更新 AMI'}
+            </button>
+          )}
           <button className="btn btn-sm" onClick={provision} disabled={!!busy || !amiArn || blockOpen || (mode === 'byo' && (!albArn || !vpcId || selSubnets.length === 0))}>
             {busy === 'provision' ? '创建中…' : created ? '重新创建 / 补齐' : '创建数据面资源'}
           </button>

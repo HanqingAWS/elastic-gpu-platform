@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from ..services.aws import ec2, elbv2, ga
+from ..services.aws import ec2, elbv2, ga, autoscaling
 from ..services import provisioner
 from ..db.dynamo import get_dynamo
 
@@ -88,6 +88,35 @@ class ValidateReq(BaseModel):
     node_sg_id: str | None = None
     serving_port: int = 8000
     autofix: bool = True
+
+
+class UpdateAmiReq(BaseModel):
+    region: str
+    ami_id: str
+    refresh: bool = False   # true=对在跑实例滚动替换,立即用上新 AMI;默认否(仅新拉起的实例用新 AMI)
+
+
+@router.post("/update-ami")
+async def update_ami(req: UpdateAmiReq):
+    """轻量更新该区 AMI:LT 追加新版本(只换 ImageId,机型/SG/密钥/profile/磁盘全继承)+ 写库 ami_arn。
+    **不碰子网 / 安全组 / ALB / GA**。ASG 用 $Latest → 新实例自动用新 AMI;refresh=true 才滚动替换在跑实例。
+    同步返回(仅两次 EC2 调用 + 一次写库,秒级)。"""
+    ami = req.ami_id.strip()
+    if not ami:
+        raise HTTPException(status_code=400, detail="ami_id 必填")
+    try:
+        lt = ec2.update_launch_template_ami(req.region, f"nlp-lt-{req.region}", ami)
+    except RuntimeError as e:
+        if str(e).startswith("NO_LT:"):
+            raise HTTPException(status_code=409,
+                                detail=f"{req.region} 尚无启动模板(该区数据面未创建),请先用「创建数据面资源」")
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
+        get_dynamo().put_config({"regions": {req.region: {"ami_arn": ami}}})  # regions 深合并,只更 ami_arn
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"LT 已更新为新 AMI,但写库 ami_arn 失败:{e}")
+    refresh = autoscaling.start_instance_refresh(req.region, f"nlp-od-{req.region}") if req.refresh else None
+    return {"region": req.region, "ami_id": ami, "launch_template": lt, "refresh": refresh}
 
 
 @router.post("/validate")
