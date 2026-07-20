@@ -175,6 +175,20 @@ log "部署控制面 5 个栈(nlp-$ENV-*: network/dynamodb/cognito/ecs/monitorin
   || die "cdk deploy 失败(看上面 CloudFormation 报错;常见:IAM 权限不足 / 镜像未推 / 区域配额 / 镜像与 Fargate 架构不一致)。"
 ok "cdk deploy 完成"
 
+# ---- 8b) 强制滚动 ECS 服务 ----
+# 只改应用代码(镜像同为 :latest tag、CDK 无 infra diff)时,cdk deploy 不会重部署 ECS
+# → 新镜像已在 ECR 但在跑的任务仍是旧的。这里强制滚动,让「git pull + deploy.sh」能真正更新现有环境。
+log "强制滚动 ECS 服务以拉取新 :latest 镜像(cluster nlp-$ENV)"
+SVCS="$(aws ecs list-services --cluster "nlp-$ENV" --region "$REGION" --query 'serviceArns[]' --output text 2>/dev/null)"
+if [ -n "$SVCS" ]; then
+  for svc in $SVCS; do
+    aws ecs update-service --cluster "nlp-$ENV" --service "$svc" --force-new-deployment --region "$REGION" >/dev/null 2>&1 \
+      && ok "已触发滚动:${svc##*/}" || warn "滚动失败(可稍后手动 force-new-deployment):$svc"
+  done
+else
+  warn "未发现 nlp-$ENV 集群的服务(首次部署时属正常,cdk 已建新任务);如更新未生效可手动 force-new-deployment。"
+fi
+
 # ---- 9) 取输出 ----
 log "读取部署输出"
 get_out() { aws cloudformation describe-stacks --stack-name "$1" --region "$REGION" \
