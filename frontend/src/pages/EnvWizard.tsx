@@ -362,10 +362,8 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   // 只更新 AMI:仅给该区 LT 追加新版本(换 ImageId)+ 写库,不碰子网/安全组/ALB/GA。已建成的区才有意义。
   const updateAmiOnly = async () => {
     if (!amiArn) { setToast({ ok: false, msg: '请先填 AMI' }); return; }
-    // 确认框只做「继续 / 中止」:取消 = 整个操作中止(不调接口、不提示成功)
-    if (!window.confirm(
-      `只更新 ${region} 的 AMI 为:\n${amiArn}\n\n仅给启动模板追加新版本 + 写库,不动子网 / 安全组 / ALB / GA。\n新拉起的实例用新 AMI,在跑实例保持不变。\n\n继续?`,
-    )) return;
+    // 确认框:确定=更新,取消=不更新(简明,不堆术语)
+    if (!window.confirm(`更新 ${region} 的 AMI 为:\n${amiArn}\n\n下次拉起新实例时生效。确定?`)) return;
     setBusy('ami'); setToast(null);
     try {
       const r = await api.updateAmi(region, amiArn, false);  // 不滚动替换在跑实例(纯更模板 + 写库)
