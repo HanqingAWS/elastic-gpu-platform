@@ -362,14 +362,14 @@ function RegionDrawer({ region, onClose, onChanged }: { region: string; onClose:
   // 只更新 AMI:仅给该区 LT 追加新版本(换 ImageId)+ 写库,不碰子网/安全组/ALB/GA。已建成的区才有意义。
   const updateAmiOnly = async () => {
     if (!amiArn) { setToast({ ok: false, msg: '请先填 AMI' }); return; }
-    const refresh = window.confirm(
-      `只更新 ${region} 的 AMI 为:\n${amiArn}\n\n仅追加启动模板新版本 + 写库,不动子网 / 安全组 / ALB / GA。\n\n【确定】= 同时滚动替换在跑的 GPU 实例,立即用上新 AMI(会短暂中断服务)\n【取消】= 只更模板,新拉起的实例才用新 AMI,在跑实例保持不变(推荐)`,
-    );
+    // 确认框只做「继续 / 中止」:取消 = 整个操作中止(不调接口、不提示成功)
+    if (!window.confirm(
+      `只更新 ${region} 的 AMI 为:\n${amiArn}\n\n仅给启动模板追加新版本 + 写库,不动子网 / 安全组 / ALB / GA。\n新拉起的实例用新 AMI,在跑实例保持不变。\n\n继续?`,
+    )) return;
     setBusy('ami'); setToast(null);
     try {
-      const r = await api.updateAmi(region, amiArn, refresh);
-      setToast({ ok: true, msg: `AMI 已更新 → 启动模板 v${r.launch_template?.new_version}` +
-        (refresh ? '(已发起在跑实例滚动替换)✓' : '(新实例生效;在跑实例不变)✓') });
+      const r = await api.updateAmi(region, amiArn, false);  // 不滚动替换在跑实例(纯更模板 + 写库)
+      setToast({ ok: true, msg: `AMI 已更新 → 启动模板 v${r.launch_template?.new_version}(新实例生效;在跑实例不变)✓` });
       onChanged();
     } catch (e: any) { setToast({ ok: false, msg: e.message }); }
     finally { setBusy(null); }
