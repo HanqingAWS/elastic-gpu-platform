@@ -111,8 +111,12 @@ def create_endpoint_group(accelerator_arn: str, region: str,
 
 def register_alb(accelerator_arn: str, region: str, alb_arn: str,
                  listener_port: int = 443, endpoint_port: int = 80, dry_run: bool = True) -> dict:
-    """把 ALB 注册进该区 endpoint group。GA 监听 443,ALB 监听 80 → 用 PortOverrides 把 443 映射到 80。
-    endpoint group 不存在则运行时创建(健康检查端口 = ALB 监听端口),支持自助扩区、无需 cdk deploy。"""
+    """把 ALB 注册进该区 endpoint group。端口自适应:
+    ALB 已有与 GA listener 同端口的 listener(443,BYO 带证书 ALB 的常见形态)
+    → 不写 PortOverride,GA 443 直达 ALB 443,并显式清掉历史 443->endpoint_port 残留;
+    否则(平台自建 ALB 只有 HTTP:80)→ PortOverrides 把 443 映射到 endpoint_port。
+    endpoint group 不存在则运行时创建(健康检查端口 = 实际转发端口),支持自助扩区、无需 cdk deploy。"""
+    from . import elbv2  # noqa: PLC0415  懒加载,保持 ga 模块可独立离线 import
     if dry_run:
         eg_arn = None
         try:
@@ -120,12 +124,15 @@ def register_alb(accelerator_arn: str, region: str, alb_arn: str,
         except Exception:  # noqa: BLE001  离线/无凭证时 dry-run 仍可继续
             pass
         return {"planned": f"register ALB into GA endpoint group ({region}) ClientIPPreservation=True, "
-                           f"portOverride {listener_port}->{endpoint_port}", "endpoint_group_arn": eg_arn}
+                           f"portOverride {listener_port}->{endpoint_port}(若 ALB 已有 :{listener_port} listener 则免 override 直达)",
+                "endpoint_group_arn": eg_arn}
+    direct = listener_port in elbv2.listener_ports(region, alb_arn)  # ALB 自带 443 → GA 直达,免 override
+    effective_port = listener_port if direct else endpoint_port
     eg_arn = find_endpoint_group_arn(accelerator_arn, region)
     created = False
-    if not eg_arn:  # 缺则建(运行时扩区)——健康检查端口用 ALB 监听端口
+    if not eg_arn:  # 缺则建(运行时扩区)——健康检查端口用实际转发端口
         eg_arn = create_endpoint_group(accelerator_arn, region,
-                                       health_check_port=endpoint_port, dry_run=False)
+                                       health_check_port=effective_port, dry_run=False)
         created = eg_arn is not None
     if not eg_arn:
         raise RuntimeError(f"无法为 {region} 找到或创建 GA endpoint group")
@@ -133,9 +140,13 @@ def register_alb(accelerator_arn: str, region: str, alb_arn: str,
     ga.update_endpoint_group(
         EndpointGroupArn=eg_arn,
         EndpointConfigurations=[{"EndpointId": alb_arn, "Weight": 100, "ClientIPPreservationEnabled": True}],
-        PortOverrides=[{"ListenerPort": listener_port, "EndpointPort": endpoint_port}],
+        # direct 时传空列表显式清除(而非省略参数):BYO 证书 ALB 若曾被写过 443->80,重跑即自愈
+        PortOverrides=[] if direct else [{"ListenerPort": listener_port, "EndpointPort": endpoint_port}],
+        HealthCheckPort=effective_port,
     )
-    return {"endpoint_group_arn": eg_arn, "port_override": f"{listener_port}->{endpoint_port}",
+    return {"endpoint_group_arn": eg_arn,
+            "port_override": None if direct else f"{listener_port}->{endpoint_port}",
+            "endpoint_port": effective_port, "alb_direct": direct,
             "endpoint_group_created": created}
 
 

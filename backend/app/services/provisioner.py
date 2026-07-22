@@ -166,16 +166,23 @@ def _provision_byo(region, ami_id, *, vpc_id, asg_subnet_ids, alb_arn, ga_accele
     emit({"listener": elbv2.ensure_listener_forward(region, alb_arn, ALB_LISTENER_PORT, tg_arn, dry_run=dry_run)})
 
     # 5) 注册进【所选 GA】的该区 endpoint group(缺则建),再把 GA SG 放行进【ALB 的 SG】
-    emit({"ga_register": ga.register_alb(ga_arn, region, alb_arn, listener_port=443, endpoint_port=ALB_LISTENER_PORT, dry_run=dry_run)})
+    #    端口自适应(见 ga.register_alb):BYO ALB 已有 443 listener(带证书)→ 免 PortOverride 直达 443;
+    #    此时 GA 入站放行与健康检查端口都随实际转发端口(reg.endpoint_port)。
+    reg = ga.register_alb(ga_arn, region, alb_arn, listener_port=443, endpoint_port=ALB_LISTENER_PORT, dry_run=dry_run)
+    emit({"ga_register": reg})
+    ga_traffic_port = reg.get("endpoint_port", ALB_LISTENER_PORT)
+    if reg.get("alb_direct"):
+        emit({"ga_note": {"alb_443_direct": "ALB 已有 443 listener:GA 443 直达 ALB 443(未写 PortOverride,历史残留已清除)。"
+                                            "请确认该 443 listener 的规则会转发到平台 TG,否则 GA 流量不会到达 GPU 节点"}})
     if dry_run:
-        emit({"ga_ingress": {"planned": "wait GlobalAccelerator SG then authorize on ALB SG :%d" % ALB_LISTENER_PORT}})
+        emit({"ga_ingress": {"planned": "wait GlobalAccelerator SG then authorize on ALB SG :%d" % ga_traffic_port}})
     else:
         ga_sg = ga.wait_global_accelerator_sg(region, vpc_id)
         if not ga_sg:
             emit({"ga_ingress": {"error": "GlobalAccelerator SG 未在超时内出现"}})
         else:
             for asg_sg in (alb_sgs or [sg_id]):
-                emit({"ga_ingress": ec2.authorize_ingress_from_sg(region, asg_sg, ga_sg, ALB_LISTENER_PORT, "from GlobalAccelerator SG", dry_run=False)})
+                emit({"ga_ingress": ec2.authorize_ingress_from_sg(region, asg_sg, ga_sg, ga_traffic_port, "from GlobalAccelerator SG", dry_run=False)})
 
     # 6) GPU ASG(100% 按需,desired=0)放【私有子网】,挂到 TG
     od = autoscaling.create_od_asg(region, f"nlp-od-{region}", lt_id, asg_subnet_ids, tg_arn, types=valid_types, dry_run=dry_run)
@@ -227,23 +234,34 @@ def validate_region(region: str, alb_arn: str, ga_accelerator_arn: str | None = 
                 add("ga_registered", "ok", f"ALB 已注册进 GA endpoint group,health={hs}")
             else:
                 add("ga_registered", "warn", "ALB 未注册进 GA endpoint group(provision 会注册)")
+            # 2b) PortOverride 与 ALB listener 是否错配:ALB 已有 443(证书)却仍 override 443->其它端口 → 流量必不通
+            stale = [p for p in (eg.get("PortOverrides") or [])
+                     if p.get("ListenerPort") == 443 and p.get("EndpointPort") != 443]
+            if stale and 443 in elbv2.listener_ports(region, alb_arn):
+                add("ga_port_override", "warn",
+                    f"ALB 已有 443 listener,但 GA 仍有 PortOverride 443->{stale[0].get('EndpointPort')}"
+                    f"(HTTPS ALB 将不通);重跑「创建数据面资源」会自动清除该 override")
     except Exception as e:  # noqa: BLE001
         add("ga_registered", "warn", f"GA 检查异常:{e}")
 
-    # 3) GA SG → ALB SG :80(缺则自动补,幂等去重)
+    # 3) GA SG → ALB SG(缺则自动补,幂等去重)。端口随 GA 实际转发口:ALB 有 443 → 443,否则 80
+    try:
+        ga_traffic_port = 443 if 443 in elbv2.listener_ports(region, alb_arn) else ALB_LISTENER_PORT
+    except Exception:  # noqa: BLE001
+        ga_traffic_port = ALB_LISTENER_PORT
     ga_sg = ga.find_global_accelerator_sg(region, vpc_id)
     if not ga_sg:
         add("ga_sg", "warn", "GA 托管 SG 尚未出现(ALB 注册 client-IP 保留后才生成);稍后重试校验")
     else:
         fixed = False
         for asg_sg in (alb_sgs or []):
-            if ec2.sg_allows_from(region, asg_sg, ga_sg, ALB_LISTENER_PORT):
+            if ec2.sg_allows_from(region, asg_sg, ga_sg, ga_traffic_port):
                 continue
             if autofix:
-                ec2.authorize_ingress_from_sg(region, asg_sg, ga_sg, ALB_LISTENER_PORT, "from GlobalAccelerator SG", dry_run=False)
+                ec2.authorize_ingress_from_sg(region, asg_sg, ga_sg, ga_traffic_port, "from GlobalAccelerator SG", dry_run=False)
                 fixed = True
             else:
-                add("ga_to_alb_sg", "warn", f"ALB SG {asg_sg} 未放行 GA SG :{ALB_LISTENER_PORT}")
+                add("ga_to_alb_sg", "warn", f"ALB SG {asg_sg} 未放行 GA SG :{ga_traffic_port}")
         add("ga_to_alb_sg", "fixed" if fixed else "ok",
             "已补 GA→ALB 安全组放行(无重复)" if fixed else "GA→ALB 安全组已放行")
 
@@ -359,21 +377,22 @@ def provision_region(region: str, ami_id: str, *, mode: str = "auto", vpc_id: st
     # 5b) ALB 与节点同处一个 SG → 自引用规则放行 serving_port,使 ALB 可访问目标并做健康检查
     emit({"self_ingress": ec2.authorize_self_ingress(region, sg_id, serving_port, dry_run=dry_run)})
 
-    # 6) 注册 GA endpoint(client IP preservation;GA 443 → ALB 80 端口映射)
+    # 6) 注册 GA endpoint(client IP preservation;端口自适应:平台自建 ALB 只有 HTTP:80 → 443->80 映射)
     reg = ga.register_alb(ga_arn, region,
                           alb.get("alb_arn", "arn:alb:DRYRUN"),
                           listener_port=443, endpoint_port=ALB_LISTENER_PORT, dry_run=dry_run)
     emit({"ga_register": reg})
+    ga_traffic_port = reg.get("endpoint_port", ALB_LISTENER_PORT)
 
-    # 7) 轮询 GlobalAccelerator SG → 引用它放行 GA 入站到 ALB 监听端口(80,兼作 TCP 健康检查口)
+    # 7) 轮询 GlobalAccelerator SG → 引用它放行 GA 入站到实际转发端口(兼作 TCP 健康检查口)
     if dry_run:
-        emit({"ga_ingress": {"planned": "wait GlobalAccelerator SG then authorize ingress (%d)" % ALB_LISTENER_PORT}})
+        emit({"ga_ingress": {"planned": "wait GlobalAccelerator SG then authorize ingress (%d)" % ga_traffic_port}})
     else:
         ga_sg = ga.wait_global_accelerator_sg(region, vpc_id)
         if not ga_sg:
             emit({"ga_ingress": {"error": "GlobalAccelerator SG 未在超时内出现"}})
         else:
-            emit({"ga_ingress": ga.authorize_ga_ingress(region, sg_id, ga_sg, [ALB_LISTENER_PORT], dry_run=False)})
+            emit({"ga_ingress": ga.authorize_ga_ingress(region, sg_id, ga_sg, [ga_traffic_port], dry_run=False)})
 
     # 8) GPU ASG(100% 按需,机型按优先级 prioritized,desired=0)。不再创建 Spot ASG。
     od = autoscaling.create_od_asg(region, f"nlp-od-{region}", lt_id, subnet_ids, alb.get("tg_arn", "tg-DRYRUN"), types=valid_types, dry_run=dry_run)

@@ -80,6 +80,12 @@ def describe_alb(region: str, alb_arn: str) -> dict:
             "azs": [z["ZoneName"] for z in lb.get("AvailabilityZones", [])]}
 
 
+def listener_ports(region: str, alb_arn: str) -> dict[int, str]:
+    """ALB 现有 listener 的 {端口: 协议}(BYO 时判断是否已有 443/HTTPS,决定 GA 是否需要 PortOverride)。"""
+    r = client("elbv2", region).describe_listeners(LoadBalancerArn=alb_arn)
+    return {l["Port"]: l.get("Protocol", "") for l in r.get("Listeners", [])}
+
+
 def create_target_group(region: str, vpc_id: str, serving_port: int, health_path: str,
                         name: str | None = None, dry_run: bool = True) -> dict:
     """建 TG(HTTP/serving_port,/health,LOR)。幂等复用同名。BYO 与 auto 共用。"""
